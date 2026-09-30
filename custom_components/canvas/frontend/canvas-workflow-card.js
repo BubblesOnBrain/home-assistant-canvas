@@ -11,6 +11,8 @@
 const DOMAIN = "canvas";
 const NOTE_MAX = 500;
 const SAVED_MS = 1500;
+// Rows shown per list before "Show all"; short lists are easier to start on.
+const DEFAULT_LIMIT = 5;
 const SECTIONS = [
   "attention",
   "upcoming",
@@ -203,6 +205,8 @@ class CanvasWorkflowCard extends HTMLElement {
     // Close-without-grade forms that are open, with what's been entered.
     this._closing = {};
     this._moreOpen = new Set();
+    // Lists opened with "Show all".
+    this._expanded = new Set();
   }
 
   static getStubConfig(hass) {
@@ -223,7 +227,11 @@ class CanvasWorkflowCard extends HTMLElement {
     if (unknown.length) {
       throw new Error(`Unknown section(s) in 'show': ${unknown.join(", ")}`);
     }
-    this._config = { ...config, show };
+    const limit = config.limit === undefined ? DEFAULT_LIMIT : config.limit;
+    if (!Number.isInteger(limit) || limit < 0) {
+      throw new Error("'limit' must be a whole number (0 shows everything)");
+    }
+    this._config = { ...config, show, limit };
     this._stateObj = undefined;
     this._render();
   }
@@ -247,8 +255,9 @@ class CanvasWorkflowCard extends HTMLElement {
   getCardSize() {
     const a = (this._stateObj && this._stateObj.attributes) || {};
     const show = (this._config && this._config.show) || DEFAULT_SHOW;
+    const limit = (this._config && this._config.limit) || Infinity;
     const rows = show.reduce(
-      (n, section) => n + (a[ITEMS_KEY[section]] || []).length,
+      (n, section) => n + Math.min((a[ITEMS_KEY[section]] || []).length, limit),
       0,
     );
     return 1 + Math.ceil(rows * 1.5);
@@ -292,13 +301,7 @@ class CanvasWorkflowCard extends HTMLElement {
       for (const section of this._config.show) {
         const items = [...(a[ITEMS_KEY[section]] || [])];
         if (!PRESORTED.has(section)) items.sort(byUrgencyThenDue);
-        body.append(
-          this._section(
-            section,
-            items.map((i) => this._row(section, i)),
-            EMPTY_TEXT[section],
-          ),
-        );
+        body.append(this._section(section, items));
       }
     }
     this.shadowRoot.replaceChildren(h("style", { text: STYLES }), card);
@@ -320,12 +323,40 @@ class CanvasWorkflowCard extends HTMLElement {
     }
   }
 
-  _section(name, rows, emptyText) {
+  _section(name, items) {
+    const { limit } = this._config;
+    const expanded = this._expanded.has(name);
+    const shown =
+      limit && !expanded && items.length > limit
+        ? items.slice(0, limit)
+        : items;
+    const toggle =
+      limit && items.length > limit
+        ? h("button", {
+            class: "secondary more-rows",
+            text: expanded ? "Show fewer" : `Show all ${items.length}`,
+            onclick: () => {
+              if (expanded) this._expanded.delete(name);
+              else this._expanded.add(name);
+              this._render();
+            },
+          })
+        : null;
     return h("section", {}, [
-      h("h3", { text: SECTION_TITLES[name] }),
-      rows.length
-        ? h("ul", { class: "rows" }, rows)
-        : h("p", { class: "empty", text: emptyText }),
+      h("h3", {}, [
+        SECTION_TITLES[name],
+        items.length
+          ? h("span", { class: "count", text: ` ${items.length}` })
+          : null,
+      ]),
+      items.length
+        ? h(
+            "ul",
+            { class: "rows" },
+            shown.map((i) => this._row(name, i)),
+          )
+        : h("p", { class: "empty", text: EMPTY_TEXT[name] }),
+      toggle,
     ]);
   }
 
@@ -826,6 +857,12 @@ const STYLES = `
     position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
     color: var(--success-color); font-weight: 600;
   }
+  .count {
+    margin-left: 4px; padding: 0 8px; border-radius: 999px;
+    background: var(--secondary-background-color, rgba(0, 0, 0, 0.06));
+    color: var(--primary-text-color);
+  }
+  .more-rows { margin-top: 8px; width: 100%; }
   .actions { display: flex; flex-wrap: wrap; gap: 8px; }
   button {
     min-height: 44px; padding: 0 16px; border-radius: 8px; font: inherit;
