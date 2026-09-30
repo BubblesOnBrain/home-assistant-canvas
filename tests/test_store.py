@@ -501,3 +501,26 @@ async def test_record_without_snapshot_ages_from_last_edit(
     await store.async_set_assignment(AID, STUDENT, DUE, note="kept")
     assert not _reconcile(store, _data(), DUE + timedelta(days=59))
     assert _reconcile(store, _data(), DUE + timedelta(days=61))
+
+
+async def test_diagnostics_include_workflow_and_redact_token(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Diagnostics show the stored data and never the access token."""
+    from custom_components.canvas.diagnostics import (
+        async_get_config_entry_diagnostics,
+    )
+
+    _routes(aioclient_mock)
+    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    await mock_config_entry.runtime_data.workflow.async_set_assignment(
+        "134664", 6021, DUE, note="Outline done"
+    )
+
+    diagnostics = await async_get_config_entry_diagnostics(hass, mock_config_entry)
+    assert diagnostics["entry"]["access_token"] == "**REDACTED**"
+    assert diagnostics["storage_file"] == f".storage/{KEY}"
+    assert diagnostics["workflow"]["assignments"]["134664"]["note"] == "Outline done"
