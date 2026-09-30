@@ -28,6 +28,7 @@ SERVICE_SET_FOLLOWUP_STAGE = "set_followup_stage"
 
 ATTR_CONFIG_ENTRY_ID = "config_entry_id"
 ATTR_ASSIGNMENT_ID = "assignment_id"
+ATTR_STUDENT_ID = "student_id"
 ATTR_FOLLOWUP_ID = "followup_id"
 ATTR_STAGE = "stage"
 ATTR_METHOD = "method"
@@ -37,6 +38,7 @@ SET_ASSIGNMENT_STAGE_SCHEMA = vol.Schema(
     {
         vol.Optional(ATTR_CONFIG_ENTRY_ID): cv.string,
         vol.Required(ATTR_ASSIGNMENT_ID): vol.All(vol.Coerce(str), cv.string),
+        vol.Optional(ATTR_STUDENT_ID): vol.Coerce(int),
         vol.Optional(ATTR_STAGE): vol.In([s.value for s in Stage]),
         vol.Optional(ATTR_NOTE): vol.Any(cv.string, ""),
     }
@@ -47,7 +49,8 @@ SET_FOLLOWUP_STAGE_SCHEMA = vol.Schema(
         vol.Optional(ATTR_CONFIG_ENTRY_ID): cv.string,
         vol.Required(ATTR_FOLLOWUP_ID): cv.string,
         vol.Optional(ATTR_STAGE): vol.In([s.value for s in FollowupStage]),
-        vol.Optional(ATTR_METHOD): vol.In([m.value for m in FollowupMethod]),
+        # "" clears the method.
+        vol.Optional(ATTR_METHOD): vol.In(["", *(m.value for m in FollowupMethod)]),
         vol.Optional(ATTR_NOTE): vol.Any(cv.string, ""),
     }
 )
@@ -88,10 +91,11 @@ def _require_change(call: ServiceCall, *fields: str) -> None:
 
 def _find_assignment(
     data: CanvasData | None, assignment_id: str
-) -> tuple[int, CanvasAssignment, CanvasCourse | None] | None:
-    """Find an assignment in the latest Canvas data."""
+) -> dict[int, tuple[CanvasAssignment, CanvasCourse | None]]:
+    """Find an assignment in the latest Canvas data, per student."""
+    found: dict[int, tuple[CanvasAssignment, CanvasCourse | None]] = {}
     if data is None:
-        return None
+        return found
     for student_id, assignments in data.assignments_by_student.items():
         for assignment in assignments:
             if str(assignment.id) == assignment_id:
@@ -103,8 +107,8 @@ def _find_assignment(
                     ),
                     None,
                 )
-                return student_id, assignment, course
-    return None
+                found[student_id] = (assignment, course)
+    return found
 
 
 @callback
@@ -116,21 +120,34 @@ def async_setup_services(hass: HomeAssistant) -> None:
         note = _validate_note(call.data.get(ATTR_NOTE))
         coordinator = _coordinator(hass, call)
         assignment_id = call.data[ATTR_ASSIGNMENT_ID].strip()
+        # Assignment ids are per course, so siblings in one class share them.
         found = _find_assignment(coordinator.data, assignment_id)
-        record = coordinator.workflow.assignments.get(assignment_id)
-        now = dt_util.utcnow()
-        if found is not None:
-            student_id, assignment, course = found
-            snapshot = build_snapshot(assignment, course, now)
-        elif record is not None:
-            # No longer in Canvas, but she can still update her own record.
-            student_id, snapshot = record.student_id, None
-        else:
+        students = set(found) | {
+            r.student_id
+            for r in coordinator.workflow.assignments.values()
+            if r.assignment_id == assignment_id
+        }
+        if (wanted := call.data.get(ATTR_STUDENT_ID)) is not None:
+            students &= {wanted}
+        if not students:
             raise ServiceValidationError(
                 translation_domain=DOMAIN,
                 translation_key="unknown_assignment",
                 translation_placeholders={"assignment_id": assignment_id},
             )
+        if len(students) > 1:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="ambiguous_assignment",
+                translation_placeholders={"assignment_id": assignment_id},
+            )
+        student_id = students.pop()
+        now = dt_util.utcnow()
+        snapshot = None
+        if student_id in found:
+            assignment, course = found[student_id]
+            snapshot = build_snapshot(assignment, course, now)
+        # Otherwise no longer in Canvas, but she can still update her record.
         stage = call.data.get(ATTR_STAGE)
         await coordinator.workflow.async_set_assignment(
             assignment_id,
@@ -160,6 +177,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
             dt_util.utcnow(),
             stage=FollowupStage(stage) if stage else None,
             method=FollowupMethod(method) if method else None,
+            clear_method=method == "",
             note=note,
         )
         coordinator.async_workflow_changed()

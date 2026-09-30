@@ -172,7 +172,7 @@ class CanvasTodoListEntity(
                 undated_count += 1
                 continue
 
-            record = workflow.assignments.get(uid)
+            record = workflow.assignment(self.student.id, uid)
             stage = record.stage if record else Stage.NOT_STARTED
             note = record.note if record else ""
             claimed_at = record.claimed_submitted_at if record else None
@@ -255,6 +255,8 @@ class CanvasTodoListEntity(
 
         self._attr_todo_items = items
         self._attr_extra_state_attributes = {
+            # The card sends this so siblings in one class stay separate.
+            "student_id": self.student.id,
             **{
                 f"{status.value}_count": counts.get(status, 0)
                 for status in SubmissionStatus
@@ -296,7 +298,7 @@ class CanvasTodoListEntity(
             if not _followup_visible(followup, now):
                 continue
 
-            record = workflow.assignments.get(followup.assignment_id)
+            record = workflow.assignments.get(followup.record_key)
             snapshot = record.snapshot if record else None
             name = snapshot.name if snapshot else f"Assignment {followup.assignment_id}"
             course = snapshot.course if snapshot else None

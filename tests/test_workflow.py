@@ -18,6 +18,7 @@ from custom_components.canvas.workflow import (
     followup_id,
     grace_passed,
     is_overdue,
+    record_key,
     should_prune,
     summary_prefix,
 )
@@ -258,6 +259,10 @@ def test_should_prune() -> None:
     assert should_prune(None, [], NOW, after)
 
 
-def test_followup_id() -> None:
-    """Follow-up ids combine assignment and reason."""
-    assert followup_id("5506356", FollowupReason.LATE_WORK) == "5506356:late_work"
+def test_record_and_followup_ids_include_student() -> None:
+    """Keys include the student: assignment ids are shared within a course."""
+    assert record_key(6021, "5506356") == "6021:5506356"
+    assert (
+        followup_id(6021, "5506356", FollowupReason.LATE_WORK)
+        == "6021:5506356:late_work"
+    )

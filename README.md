@@ -137,7 +137,8 @@ missing → working / not started.
 Each follow-up appears as its own task on the to-do list (for example
 **✉️ EMAIL TEACHER · [Biology] Cell Lab Report**), due the next day. Ticking the
 task sets it to **contacted**; the card can also set **resolved**, how the
-teacher was contacted (`email`, `late_form`, `in_person`) and a note. Resolved
+teacher was contacted (`email`, `late_form`, `in_person`) and a note. If Canvas
+closes a follow-up, anything she wrote on it is kept. Resolved
 follow-ups stay visible for 7 days. If Canvas stops returning the assignment,
 the task stays and is marked **No longer in Canvas**.
 
@@ -159,6 +160,7 @@ Canvas account is set up.
 action: canvas.set_assignment_stage
 data:
   assignment_id: "5506356" # the to-do item's uid
+  student_id: 6021 # optional; needed only if two students share the assignment
   stage: submitted_claimed # optional
   note: Uploaded the PDF # optional; "" clears it; max 500 characters
 ```
@@ -166,7 +168,7 @@ data:
 ```yaml
 action: canvas.set_followup_stage
 data:
-  followup_id: "5506356:late_work"
+  followup_id: "6021:5506356:late_work" # student:assignment:reason
   stage: contacted # needs_contact | contacted | resolved
   method: email # email | late_form | in_person
   note: Emailed Ms. Rivera

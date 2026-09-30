@@ -115,7 +115,7 @@ async def test_student_edit_saves_immediately_and_round_trips(
     saved = hass_storage[KEY]
     assert saved["version"] == 1
     assert saved["minor_version"] == 1
-    record = saved["data"]["assignments"][AID]
+    record = saved["data"]["assignments"][f"{STUDENT}:{AID}"]
     assert record["stage"] == "submitted_claimed"
     assert record["note"] == "Uploaded from phone"
     assert record["claimed_submitted_at"] == CLAIM.isoformat()
@@ -123,7 +123,7 @@ async def test_student_edit_saves_immediately_and_round_trips(
     reloaded = CanvasWorkflowStore(hass, str(TEST_USER_ID))
     await reloaded.async_load()
     assert reloaded.as_dict() == store.as_dict()
-    assert reloaded.assignments[AID].stage is Stage.SUBMITTED_CLAIMED
+    assert reloaded.assignment(STUDENT, AID).stage is Stage.SUBMITTED_CLAIMED
 
 
 async def test_claim_timestamp_set_and_cleared(hass: HomeAssistant) -> None:
@@ -154,11 +154,16 @@ async def test_load_skips_unreadable_records(
         "key": KEY,
         "data": {
             "assignments": {
-                "1": {"stage": "working"},
-                "2": {"student_id": STUDENT, "stage": "bogus", "note": "kept"},
+                "6021:1": {"assignment_id": "1", "stage": "working"},
+                "6021:2": {
+                    "student_id": STUDENT,
+                    "assignment_id": "2",
+                    "stage": "bogus",
+                    "note": "kept",
+                },
             },
             "followups": {
-                "2:late_work": {
+                "6021:2:late_work": {
                     "assignment_id": "2",
                     "student_id": STUDENT,
                     "reason": "late_work",
@@ -166,21 +171,27 @@ async def test_load_skips_unreadable_records(
                     "method": "email",
                     "created_at": "2026-09-29T20:05:00+00:00",
                 },
-                "3:nope": {"assignment_id": "3", "student_id": 1, "reason": "nope"},
+                "6021:3:nope": {
+                    "assignment_id": "3",
+                    "student_id": 1,
+                    "reason": "nope",
+                },
             },
         },
     }
     store = CanvasWorkflowStore(hass, str(TEST_USER_ID))
     await store.async_load()
-    assert list(store.assignments) == ["2"]
-    assert store.assignments["2"].stage is Stage.NOT_STARTED
-    assert store.assignments["2"].note == "kept"
-    followup = store.followups["2:late_work"]
+    assert list(store.assignments) == ["6021:2"]
+    record = store.assignment(STUDENT, "2")
+    assert record is not None
+    assert record.stage is Stage.NOT_STARTED
+    assert record.note == "kept"
+    followup = store.followups["6021:2:late_work"]
     assert followup.stage is FollowupStage.CONTACTED
     assert followup.method is FollowupMethod.EMAIL
     # Missing contact_by falls back to the day after creation (local time).
     assert followup.contact_by == date(2026, 9, 30)
-    assert list(store.followups) == ["2:late_work"]
+    assert list(store.followups) == ["6021:2:late_work"]
 
 
 def test_storage_key_is_filename_safe() -> None:
@@ -203,7 +214,7 @@ async def test_reconcile_saves_debounced(
     freezer.tick(timedelta(seconds=3))
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
-    assert "5506356:late_work" in hass_storage[KEY]["data"]["followups"]
+    assert "6021:5506356:late_work" in hass_storage[KEY]["data"]["followups"]
 
 
 async def test_flush_writes_pending_save(
@@ -213,8 +224,8 @@ async def test_flush_writes_pending_save(
     store = CanvasWorkflowStore(hass, str(TEST_USER_ID))
     now = DUE + timedelta(hours=16)
     _reconcile(store, _data(_assignment(submitted_at=now, late=True)), now)
-    await store.async_flush()
-    assert "5506356:late_work" in hass_storage[KEY]["data"]["followups"]
+    await store.async_close()
+    assert "6021:5506356:late_work" in hass_storage[KEY]["data"]["followups"]
 
 
 async def test_untouched_assignments_get_no_record(hass: HomeAssistant) -> None:
@@ -239,10 +250,10 @@ async def test_claim_flow_opens_and_auto_resolves_followups(
     # Grace passed with nothing in Canvas: not_in_canvas opens, due next day.
     after = at_grace + timedelta(minutes=5)
     assert _reconcile(store, _data(_assignment()), after)
-    followup = store.followups["5506356:not_in_canvas"]
+    followup = store.followups["6021:5506356:not_in_canvas"]
     assert followup.stage is FollowupStage.NEEDS_CONTACT
     assert followup.contact_by == date(2026, 9, 30)
-    snapshot = store.assignments[AID].snapshot
+    snapshot = store.assignment(STUDENT, AID).snapshot
     assert snapshot is not None
     assert snapshot.canvas_status == "missing"
 
@@ -256,11 +267,11 @@ async def test_claim_flow_opens_and_auto_resolves_followups(
     assert followup.stage is FollowupStage.RESOLVED
     assert followup.resolved_at == resolved_at
     assert followup.note == AUTO_RESOLVED_NOTE
-    late = store.followups["5506356:late_work"]
+    late = store.followups["6021:5506356:late_work"]
     assert late.stage is FollowupStage.NEEDS_CONTACT
     # Her stage is left as she set it: facts and claims are never merged.
-    assert store.assignments[AID].stage is Stage.SUBMITTED_CLAIMED
-    snapshot = store.assignments[AID].snapshot
+    assert store.assignment(STUDENT, AID).stage is Stage.SUBMITTED_CLAIMED
+    snapshot = store.assignment(STUDENT, AID).snapshot
     assert snapshot is not None
     assert snapshot.canvas_status == "late"
 
@@ -273,7 +284,7 @@ async def test_paper_claim_uses_paper_grace(hass: HomeAssistant) -> None:
     _reconcile(store, paper, CLAIM + timedelta(days=2))
     assert store.followups == {}
     _reconcile(store, paper, CLAIM + PAPER + timedelta(minutes=1))
-    assert list(store.followups) == ["5506356:paper_not_graded"]
+    assert list(store.followups) == ["6021:5506356:paper_not_graded"]
 
 
 async def test_student_resolved_followup_not_reopened(hass: HomeAssistant) -> None:
@@ -283,10 +294,10 @@ async def test_student_resolved_followup_not_reopened(hass: HomeAssistant) -> No
     now = CLAIM + ONLINE + timedelta(hours=1)
     _reconcile(store, _data(_assignment()), now)
     await store.async_set_followup(
-        "5506356:not_in_canvas", now, stage=FollowupStage.RESOLVED
+        "6021:5506356:not_in_canvas", now, stage=FollowupStage.RESOLVED
     )
     assert not _reconcile(store, _data(_assignment()), now + timedelta(hours=1))
-    assert store.followups["5506356:not_in_canvas"].stage is FollowupStage.RESOLVED
+    assert store.followups["6021:5506356:not_in_canvas"].stage is FollowupStage.RESOLVED
 
 
 async def test_set_followup_stage_method_and_note(hass: HomeAssistant) -> None:
@@ -294,7 +305,7 @@ async def test_set_followup_stage_method_and_note(hass: HomeAssistant) -> None:
     store = CanvasWorkflowStore(hass, "acct")
     now = DUE + timedelta(hours=16)
     _reconcile(store, _data(_assignment(submitted_at=now, late=True)), now)
-    fid = "5506356:late_work"
+    fid = "6021:5506356:late_work"
     later = now + timedelta(days=1)
     await store.async_set_followup(
         fid, later, stage=FollowupStage.RESOLVED, method=FollowupMethod.EMAIL
@@ -318,7 +329,7 @@ async def test_last_seen_updates_at_most_daily(hass: HomeAssistant) -> None:
     assert _reconcile(store, data, first)  # snapshot + last_seen recorded
     assert not _reconcile(store, data, first + timedelta(hours=1))
     assert _reconcile(store, data, first + timedelta(days=1))
-    assert store.assignments[AID].last_seen_at == first + timedelta(days=1)
+    assert store.assignment(STUDENT, AID).last_seen_at == first + timedelta(days=1)
 
 
 async def test_gone_records_kept_then_pruned(hass: HomeAssistant) -> None:
@@ -331,10 +342,10 @@ async def test_gone_records_kept_then_pruned(hass: HomeAssistant) -> None:
 
     # Gone for 61 days, but the late_work follow-up is still open: kept.
     assert not _reconcile(store, empty, now + timedelta(days=61))
-    assert AID in store.assignments
+    assert store.assignment(STUDENT, AID) is not None
 
     await store.async_set_followup(
-        "5506356:late_work", now, stage=FollowupStage.RESOLVED
+        "6021:5506356:late_work", now, stage=FollowupStage.RESOLVED
     )
     assert not _reconcile(store, empty, now + timedelta(days=59))
     assert _reconcile(store, empty, now + timedelta(days=61))
@@ -350,8 +361,8 @@ async def test_record_reattaches_when_assignment_returns(hass: HomeAssistant) ->
     )
     _reconcile(store, _data(), DUE + timedelta(days=10))
     _reconcile(store, _data(_assignment()), DUE + timedelta(days=20))
-    assert store.assignments[AID].note == "Need graph"
-    assert store.assignments[AID].last_seen_at == DUE + timedelta(days=20)
+    assert store.assignment(STUDENT, AID).note == "Need graph"
+    assert store.assignment(STUDENT, AID).last_seen_at == DUE + timedelta(days=20)
 
 
 # --- Integration lifecycle -------------------------------------------------
@@ -397,7 +408,7 @@ async def test_data_survives_reload_and_entry_removal(
     await hass.async_block_till_done()
     reloaded: CanvasDataUpdateCoordinator = mock_config_entry.runtime_data
     assert reloaded is not coordinator
-    assert reloaded.workflow.assignments["134664"].note == "Outline done"
+    assert reloaded.workflow.assignment(6021, "134664").note == "Outline done"
 
     # Removing the integration keeps the file, so re-adding finds the data.
     assert await hass.config_entries.async_remove(mock_config_entry.entry_id)
@@ -413,7 +424,10 @@ async def test_data_survives_reload_and_entry_removal(
     assert await hass.config_entries.async_setup(new_entry.entry_id)
     await hass.async_block_till_done()
     assert new_entry.state is ConfigEntryState.LOADED
-    assert new_entry.runtime_data.workflow.assignments["134664"].stage is Stage.WORKING
+    assert (
+        new_entry.runtime_data.workflow.assignment(6021, "134664").stage
+        is Stage.WORKING
+    )
 
 
 async def test_options_change_grace_windows(
@@ -488,7 +502,7 @@ async def test_tick_reconciles_between_fetches(
     await hass.async_block_till_done()
     assert aioclient_mock.call_count == calls  # no Canvas fetch
     assert (
-        coordinator.workflow.followups["134664:not_in_canvas"].reason
+        coordinator.workflow.followups["6021:134664:not_in_canvas"].reason
         is FollowupReason.NOT_IN_CANVAS
     )
 
@@ -523,4 +537,129 @@ async def test_diagnostics_include_workflow_and_redact_token(
     diagnostics = await async_get_config_entry_diagnostics(hass, mock_config_entry)
     assert diagnostics["entry"]["access_token"] == "**REDACTED**"
     assert diagnostics["storage_file"] == f".storage/{KEY}"
-    assert diagnostics["workflow"]["assignments"]["134664"]["note"] == "Outline done"
+    assert (
+        diagnostics["workflow"]["assignments"]["6021:134664"]["note"] == "Outline done"
+    )
+
+
+# --- Regressions from adversarial review ------------------------------------
+
+
+async def test_auto_resolve_keeps_students_note_and_method(
+    hass: HomeAssistant,
+) -> None:
+    """Canvas resolving a follow-up never erases what she wrote on it."""
+    store = CanvasWorkflowStore(hass, "acct")
+    await store.async_set_assignment(AID, STUDENT, CLAIM, stage=Stage.SUBMITTED_CLAIMED)
+    now = CLAIM + ONLINE + timedelta(hours=1)
+    _reconcile(store, _data(_assignment()), now)
+    fid = f"{STUDENT}:{AID}:not_in_canvas"
+    await store.async_set_followup(
+        fid,
+        now,
+        stage=FollowupStage.CONTACTED,
+        method=FollowupMethod.EMAIL,
+        note="Emailed Ms Rivera, she will regrade",
+    )
+    later = now + timedelta(hours=3)
+    _reconcile(store, _data(_assignment(submitted_at=later, late=True)), later)
+    followup = store.followups[fid]
+    assert followup.stage is FollowupStage.RESOLVED
+    assert followup.auto_resolved is True
+    assert followup.method is FollowupMethod.EMAIL
+    assert followup.note == "Emailed Ms Rivera, she will regrade"
+
+    # Her own later change clears the auto-resolved flag.
+    await store.async_set_followup(fid, later, stage=FollowupStage.CONTACTED)
+    assert followup.auto_resolved is False
+
+
+async def test_siblings_in_same_course_are_separate(hass: HomeAssistant) -> None:
+    """Two students sharing an assignment id get their own records and follow-ups."""
+    sibling = 4899
+    store = CanvasWorkflowStore(hass, "acct")
+    now = DUE + timedelta(hours=16)
+    submitted = _assignment(submitted_at=now, late=True)
+    missing = _assignment()
+    data = CanvasData(
+        user=CanvasUser(id=TEST_USER_ID, name="Parent"),
+        courses_by_student={STUDENT: [COURSE], sibling: [COURSE]},
+        assignments_by_student={STUDENT: [submitted], sibling: [missing]},
+    )
+    await store.async_set_assignment(AID, sibling, now, stage=Stage.WORKING)
+    _reconcile(store, data, now)
+
+    mine = store.assignment(STUDENT, AID)
+    theirs = store.assignment(sibling, AID)
+    assert mine is not None and theirs is not None
+    assert mine.stage is Stage.NOT_STARTED
+    assert theirs.stage is Stage.WORKING
+    assert list(store.followups) == [f"{STUDENT}:{AID}:late_work"]
+    # No snapshot ping-pong: later passes change nothing.
+    for step in range(1, 5):
+        assert not _reconcile(store, data, now + timedelta(minutes=15 * step))
+
+
+async def test_closed_store_never_writes_again(
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """After unload, a fetch still in flight can't overwrite newer edits."""
+    store = CanvasWorkflowStore(hass, str(TEST_USER_ID))
+    await store.async_close()
+    now = DUE + timedelta(hours=16)
+    assert not _reconcile(store, _data(_assignment(submitted_at=now, late=True)), now)
+    freezer.tick(timedelta(seconds=5))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert KEY not in hass_storage
+
+
+async def test_orphan_followups_are_pruned(hass: HomeAssistant) -> None:
+    """A resolved follow-up whose record is gone still ages out."""
+    store = CanvasWorkflowStore(hass, "acct")
+    now = DUE + timedelta(hours=16)
+    _reconcile(store, _data(_assignment(submitted_at=now, late=True)), now)
+    fid = f"{STUDENT}:{AID}:late_work"
+    await store.async_set_followup(fid, now, stage=FollowupStage.RESOLVED)
+    del store.assignments[f"{STUDENT}:{AID}"]
+    assert not _reconcile(store, _data(), now + timedelta(days=59))
+    assert _reconcile(store, _data(), now + timedelta(days=61))
+    assert store.followups == {}
+
+
+async def test_record_on_non_actionable_assignment_kept_while_in_canvas(
+    hass: HomeAssistant,
+) -> None:
+    """Records on items hidden from the list (in-class) still count as seen."""
+    in_class = CanvasAssignment(
+        id=int(AID),
+        course_id=COURSE.id,
+        name="Do Now 9/28",
+        due_at=DUE,
+        submission_types=("none",),
+    )
+    store = CanvasWorkflowStore(hass, "acct")
+    await store.async_set_assignment(AID, STUDENT, DUE, note="kept")
+    for days in (30, 61, 90):
+        _reconcile(store, _data(in_class), DUE + timedelta(days=days))
+    assert store.assignment(STUDENT, AID) is not None
+
+
+async def test_reconcile_error_does_not_break_canvas_updates(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """A workflow bug must not stop the integration loading Canvas data."""
+    from unittest.mock import patch
+
+    _routes(aioclient_mock)
+    with patch.object(
+        CanvasWorkflowStore, "reconcile", side_effect=RuntimeError("boom")
+    ):
+        assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+    assert mock_config_entry.runtime_data.data is not None

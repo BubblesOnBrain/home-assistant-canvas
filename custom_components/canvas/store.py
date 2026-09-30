@@ -41,6 +41,7 @@ from .workflow import (
     display_state,
     followup_actions,
     followup_id,
+    record_key,
     should_prune,
 )
 
@@ -49,6 +50,7 @@ _LOGGER = logging.getLogger(__name__)
 # `last_seen_at` only moves forward this often, so hourly fetches don't rewrite
 # the file just to bump a timestamp.
 LAST_SEEN_RESOLUTION = timedelta(days=1)
+# Only used when the student hasn't written a note of her own.
 AUTO_RESOLVED_NOTE = "Auto-resolved: Canvas shows it"
 
 
@@ -120,6 +122,7 @@ class AssignmentRecord:
     """The student's workflow state for one Canvas assignment."""
 
     student_id: int
+    assignment_id: str
     stage: Stage = Stage.NOT_STARTED
     note: str = ""
     claimed_submitted_at: datetime | None = None
@@ -128,10 +131,16 @@ class AssignmentRecord:
     last_seen_at: datetime | None = None
     snapshot: AssignmentSnapshot | None = None
 
+    @property
+    def key(self) -> str:
+        """Return the storage key."""
+        return record_key(self.student_id, self.assignment_id)
+
     def as_dict(self) -> dict[str, Any]:
         """Return the stored form."""
         return {
             "student_id": self.student_id,
+            "assignment_id": self.assignment_id,
             "stage": self.stage.value,
             "note": self.note,
             "claimed_submitted_at": _iso(self.claimed_submitted_at),
@@ -147,6 +156,7 @@ class AssignmentRecord:
         snapshot = raw.get("snapshot")
         return cls(
             student_id=int(raw["student_id"]),
+            assignment_id=str(raw["assignment_id"]),
             stage=_enum(Stage, raw.get("stage"), Stage.NOT_STARTED),
             note=str(raw.get("note") or ""),
             claimed_submitted_at=_dt(raw.get("claimed_submitted_at")),
@@ -175,11 +185,18 @@ class FollowupRecord:
     note: str = ""
     stage_changed_at: datetime | None = None
     resolved_at: datetime | None = None
+    # Resolved because Canvas showed the work, not by the student.
+    auto_resolved: bool = False
 
     @property
     def id(self) -> str:
         """Return the follow-up id."""
-        return followup_id(self.assignment_id, self.reason)
+        return followup_id(self.student_id, self.assignment_id, self.reason)
+
+    @property
+    def record_key(self) -> str:
+        """Return the key of the assignment record this belongs to."""
+        return record_key(self.student_id, self.assignment_id)
 
     def as_dict(self) -> dict[str, Any]:
         """Return the stored form."""
@@ -194,6 +211,7 @@ class FollowupRecord:
             "contact_by": _iso(self.contact_by),
             "stage_changed_at": _iso(self.stage_changed_at),
             "resolved_at": _iso(self.resolved_at),
+            "auto_resolved": self.auto_resolved,
         }
 
     @classmethod
@@ -215,6 +233,7 @@ class FollowupRecord:
             note=str(raw.get("note") or ""),
             stage_changed_at=_dt(raw.get("stage_changed_at")),
             resolved_at=_dt(raw.get("resolved_at")),
+            auto_resolved=bool(raw.get("auto_resolved", False)),
         )
 
 
@@ -276,6 +295,7 @@ class CanvasWorkflowStore:
         )
         self._data = _Data()
         self._save_pending = False
+        self._closed = False
 
     @property
     def key(self) -> str:
@@ -284,7 +304,7 @@ class CanvasWorkflowStore:
 
     @property
     def assignments(self) -> dict[str, AssignmentRecord]:
-        """Return assignment records keyed by Canvas assignment id."""
+        """Return assignment records keyed by "<student id>:<assignment id>"."""
         return self._data.assignments
 
     @property
@@ -292,15 +312,23 @@ class CanvasWorkflowStore:
         """Return follow-ups keyed by follow-up id."""
         return self._data.followups
 
+    def assignment(
+        self, student_id: int, assignment_id: str
+    ) -> AssignmentRecord | None:
+        """Return one student's record for an assignment, if any."""
+        return self._data.assignments.get(record_key(student_id, assignment_id))
+
     async def async_load(self) -> None:
         """Load stored data. Unreadable records are skipped, not fatal."""
         raw = await self._store.async_load() or {}
         data = _Data()
-        for aid, record in (raw.get("assignments") or {}).items():
+        for key, record in (raw.get("assignments") or {}).items():
             try:
-                data.assignments[str(aid)] = AssignmentRecord.from_dict(record)
+                parsed = AssignmentRecord.from_dict(record)
             except (KeyError, TypeError, ValueError) as err:
-                _LOGGER.warning("Skipping unreadable workflow record %s: %s", aid, err)
+                _LOGGER.warning("Skipping unreadable workflow record %s: %s", key, err)
+                continue
+            data.assignments[parsed.key] = parsed
         for fid, record in (raw.get("followups") or {}).items():
             try:
                 followup = FollowupRecord.from_dict(record)
@@ -314,7 +342,7 @@ class CanvasWorkflowStore:
         """Return the stored form of all data."""
         return {
             "assignments": {
-                aid: rec.as_dict() for aid, rec in self._data.assignments.items()
+                key: rec.as_dict() for key, rec in self._data.assignments.items()
             },
             "followups": {
                 fid: rec.as_dict() for fid, rec in self._data.followups.items()
@@ -327,6 +355,8 @@ class CanvasWorkflowStore:
 
     def _schedule_save(self) -> None:
         """Save soon (debounced); used for changes the student didn't make."""
+        if self._closed:
+            return
         self._save_pending = True
         self._store.async_delay_save(self._data_to_save, STORAGE_SAVE_DELAY)
 
@@ -334,10 +364,15 @@ class CanvasWorkflowStore:
         """Save immediately; used for the student's own edits."""
         await self._store.async_save(self._data_to_save())
 
-    async def async_flush(self) -> None:
-        """Write any pending debounced save now (on unload)."""
+    async def async_close(self) -> None:
+        """Write any pending save and stop writing (on unload).
+
+        A fetch still in flight from the unloading entry must not write this
+        copy later, over edits made through the reloaded entry.
+        """
         if self._save_pending:
             await self._async_save_now()
+        self._closed = True
 
     async def async_remove(self) -> None:
         """Delete the storage file."""
@@ -345,12 +380,13 @@ class CanvasWorkflowStore:
         self._data = _Data()
         self._save_pending = False
 
-    def followups_for(self, assignment_id: str) -> dict[FollowupReason, FollowupRecord]:
-        """Return the follow-ups for one assignment, keyed by reason."""
+    def followups_for(
+        self, student_id: int, assignment_id: str
+    ) -> dict[FollowupReason, FollowupRecord]:
+        """Return the follow-ups for one student's assignment, keyed by reason."""
+        key = record_key(student_id, assignment_id)
         return {
-            f.reason: f
-            for f in self._data.followups.values()
-            if f.assignment_id == assignment_id
+            f.reason: f for f in self._data.followups.values() if f.record_key == key
         }
 
     async def async_set_assignment(
@@ -364,10 +400,13 @@ class CanvasWorkflowStore:
         snapshot: AssignmentSnapshot | None = None,
     ) -> AssignmentRecord:
         """Set the stage and/or note on an assignment and save immediately."""
-        record = self._data.assignments.get(assignment_id)
+        key = record_key(student_id, assignment_id)
+        record = self._data.assignments.get(key)
         if record is None:
-            record = AssignmentRecord(student_id=student_id)
-            self._data.assignments[assignment_id] = record
+            record = AssignmentRecord(
+                student_id=student_id, assignment_id=assignment_id
+            )
+            self._data.assignments[key] = record
         if stage is not None and stage is not record.stage:
             record.stage = stage
             record.stage_changed_at = now
@@ -390,6 +429,7 @@ class CanvasWorkflowStore:
         *,
         stage: FollowupStage | None = None,
         method: FollowupMethod | None = None,
+        clear_method: bool = False,
         note: str | None = None,
     ) -> FollowupRecord:
         """Update a follow-up and save immediately. Raises KeyError if unknown."""
@@ -398,7 +438,10 @@ class CanvasWorkflowStore:
             followup.stage = stage
             followup.stage_changed_at = now
             followup.resolved_at = now if stage is FollowupStage.RESOLVED else None
-        if method is not None:
+            followup.auto_resolved = False
+        if clear_method:
+            followup.method = None
+        elif method is not None:
             followup.method = method
         if note is not None:
             followup.note = note
@@ -418,24 +461,32 @@ class CanvasWorkflowStore:
         `last_seen_at`, and prunes long-gone records. Returns True if anything
         changed (a debounced save is then scheduled).
         """
+        if self._closed:
+            return False
         changed = False
         seen: set[str] = set()
-        by_assignment: dict[str, dict[FollowupReason, FollowupRecord]] = defaultdict(
-            dict
-        )
+        by_record: dict[str, dict[FollowupReason, FollowupRecord]] = defaultdict(dict)
         for followup in self._data.followups.values():
-            by_assignment[followup.assignment_id][followup.reason] = followup
+            by_record[followup.record_key][followup.reason] = followup
 
         for student_id, assignments in data.assignments_by_student.items():
             courses = {c.id: c for c in data.courses_by_student.get(student_id, [])}
             for assignment in assignments:
+                aid = str(assignment.id)
+                key = record_key(student_id, aid)
+                seen.add(key)
+                record = self._data.assignments.get(key)
+                if record is not None and (
+                    record.last_seen_at is None
+                    or now - record.last_seen_at >= LAST_SEEN_RESOLUTION
+                ):
+                    record.last_seen_at = now
+                    changed = True
                 if not is_actionable_todo_assignment(assignment):
                     continue
-                aid = str(assignment.id)
-                seen.add(aid)
+
                 status = submission_status(assignment, now)
                 paper = not is_online_submission_assignment(assignment)
-                record = self._data.assignments.get(aid)
                 state = display_state(
                     status,
                     record.stage if record else Stage.NOT_STARTED,
@@ -445,15 +496,17 @@ class CanvasWorkflowStore:
                     online_grace,
                     paper_grace,
                 )
-                existing = by_assignment.get(aid, {})
+                existing = by_record.get(key, {})
                 actions = followup_actions(
                     status, state, {r: f.stage for r, f in existing.items()}
                 )
                 if record is None and not actions:
                     continue
                 if record is None:
-                    record = AssignmentRecord(student_id=student_id)
-                    self._data.assignments[aid] = record
+                    record = AssignmentRecord(
+                        student_id=student_id, assignment_id=aid, last_seen_at=now
+                    )
+                    self._data.assignments[key] = record
                     changed = True
 
                 snapshot = build_snapshot(
@@ -461,12 +514,6 @@ class CanvasWorkflowStore:
                 )
                 if record.snapshot != snapshot:
                     record.snapshot = snapshot
-                    changed = True
-                if (
-                    record.last_seen_at is None
-                    or now - record.last_seen_at >= LAST_SEEN_RESOLUTION
-                ):
-                    record.last_seen_at = now
                     changed = True
 
                 for reason, action in actions:
@@ -482,18 +529,20 @@ class CanvasWorkflowStore:
                         )
                         self._data.followups[followup.id] = followup
                     else:
+                        # Keep whatever she wrote (method, note): it's hers.
                         followup = existing[reason]
                         followup.stage = FollowupStage.RESOLVED
-                        followup.method = None
-                        followup.note = AUTO_RESOLVED_NOTE
                         followup.stage_changed_at = now
                         followup.resolved_at = now
+                        followup.auto_resolved = True
+                        if not followup.note:
+                            followup.note = AUTO_RESOLVED_NOTE
 
         prune_after = timedelta(days=RECORD_PRUNE_DAYS)
-        for aid, record in list(self._data.assignments.items()):
-            if aid in seen:
+        for key, record in list(self._data.assignments.items()):
+            if key in seen:
                 continue
-            followups = by_assignment.get(aid, {})
+            followups = by_record.get(key, {})
             # A record never matched to Canvas ages from its last edit instead.
             if should_prune(
                 record.last_seen_at or record.updated_at,
@@ -501,9 +550,23 @@ class CanvasWorkflowStore:
                 now,
                 prune_after,
             ):
-                del self._data.assignments[aid]
+                del self._data.assignments[key]
                 for followup in followups.values():
                     self._data.followups.pop(followup.id, None)
+                changed = True
+        # Follow-ups whose record was lost (e.g. unreadable) age on their own.
+        for fid, followup in list(self._data.followups.items()):
+            if followup.record_key in self._data.assignments or (
+                followup.record_key in seen
+            ):
+                continue
+            if should_prune(
+                followup.stage_changed_at or followup.created_at,
+                [followup.stage],
+                now,
+                prune_after,
+            ):
+                del self._data.followups[fid]
                 changed = True
 
         if changed:

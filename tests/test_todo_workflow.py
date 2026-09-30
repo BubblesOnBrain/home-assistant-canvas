@@ -192,7 +192,7 @@ async def test_claim_never_completes_item(
     assert item.summary.startswith("⚠️ NOT IN CANVAS · ")
     assert item.status == "needs_action"
     assert _attrs(hass)["not_in_canvas_count"] == 1
-    task = _item(hass, f"followup:{MISSING}:not_in_canvas")
+    task = _item(hass, f"followup:6021:{MISSING}:not_in_canvas")
     assert task.summary == "⚠️ CHECK CANVAS · [Biology - P3 Rivera] Assignment 1001"
     assert task.status == "needs_action"
 
@@ -216,7 +216,7 @@ async def test_late_work_followup_task(
     assert late.status == "completed"
     assert late.summary.startswith("✉️ LATE · ")
 
-    task = _item(hass, f"followup:{LATE}:late_work")
+    task = _item(hass, f"followup:6021:{LATE}:late_work")
     assert task.summary == "✉️ EMAIL TEACHER · [Biology - P3 Rivera] Assignment 1003"
     assert task.status == "needs_action"
     # Opened Tue 29th 5 am Pacific: due the next local day.
@@ -228,7 +228,7 @@ async def test_late_work_followup_task(
     assert attrs["followup_needs_contact_count"] == 1
     assert attrs["followup_overdue_count"] == 0
     followup = attrs["followup_items"][0]
-    assert followup["id"] == f"{LATE}:late_work"
+    assert followup["id"] == f"6021:{LATE}:late_work"
     assert followup["class"] == "Biology"
     assert followup["assignment"] == "Assignment 1003"
     assert followup["contact_by"] == "2026-09-30"
@@ -240,14 +240,14 @@ async def test_ticking_followup_sets_contacted(
     hass: HomeAssistant, coordinator: CanvasDataUpdateCoordinator
 ) -> None:
     """Ticking a follow-up task means contacted; unticking reverts it."""
-    uid = f"followup:{LATE}:late_work"
+    uid = f"followup:6021:{LATE}:late_work"
     await hass.services.async_call(
         "todo",
         "update_item",
         {"entity_id": ENTITY, "item": uid, "status": "completed"},
         blocking=True,
     )
-    followup = coordinator.workflow.followups[f"{LATE}:late_work"]
+    followup = coordinator.workflow.followups[f"6021:{LATE}:late_work"]
     assert followup.stage is FollowupStage.CONTACTED
     assert _item(hass, uid).status == "completed"
     assert _attrs(hass)["followup_needs_contact_count"] == 0
@@ -286,7 +286,7 @@ async def test_canvas_items_are_read_only(
             "update_item",
             {
                 "entity_id": ENTITY,
-                "item": f"followup:{LATE}:late_work",
+                "item": f"followup:6021:{LATE}:late_work",
                 "rename": "Something else",
             },
             blocking=True,
@@ -316,23 +316,23 @@ async def test_followup_marked_when_gone_and_hidden_after_resolved(
     await coordinator.async_refresh()
     await hass.async_block_till_done()
 
-    task = _item(hass, f"followup:{LATE}:late_work")
+    task = _item(hass, f"followup:6021:{LATE}:late_work")
     assert "No longer in Canvas" in task.description
     assert _attrs(hass)["followup_items"][0]["in_canvas"] is False
 
     await hass.services.async_call(
         DOMAIN,
         "set_followup_stage",
-        {"followup_id": f"{LATE}:late_work", "stage": "resolved"},
+        {"followup_id": f"6021:{LATE}:late_work", "stage": "resolved"},
         blocking=True,
     )
     await hass.async_block_till_done()
-    assert _item(hass, f"followup:{LATE}:late_work").status == "completed"
+    assert _item(hass, f"followup:6021:{LATE}:late_work").status == "completed"
 
     freezer.tick(timedelta(days=7, minutes=30))
     await coordinator.async_refresh()
     await hass.async_block_till_done()
     uids = [i.uid for i in _entity(hass).todo_items or []]
-    assert f"followup:{LATE}:late_work" not in uids
+    assert f"followup:6021:{LATE}:late_work" not in uids
     assert _attrs(hass)["followup_items"] == []
-    assert f"{LATE}:late_work" in coordinator.workflow.followups
+    assert f"6021:{LATE}:late_work" in coordinator.workflow.followups

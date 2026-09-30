@@ -75,9 +75,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: CanvasConfigEntry) -> bo
 async def async_unload_entry(hass: HomeAssistant, entry: CanvasConfigEntry) -> bool:
     """Unload a Canvas LMS config entry."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    # Write any debounced save now, so a reload never reads a stale file.
+    # Write any debounced save now, so a reload never reads a stale file, and
+    # stop this copy writing again (e.g. from a fetch still in flight).
     if (coordinator := getattr(entry, "runtime_data", None)) is not None:
-        await coordinator.workflow.async_flush()
+        await coordinator.workflow.async_close()
     return unloaded
 
 

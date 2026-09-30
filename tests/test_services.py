@@ -103,7 +103,7 @@ async def test_set_assignment_stage_and_note(
             "note": "  Uploaded the PDF  ",
         },
     )
-    record = coordinator.workflow.assignments[AID]
+    record = coordinator.workflow.assignment(6021, AID)
     assert record.stage is Stage.SUBMITTED_CLAIMED
     assert record.claimed_submitted_at is not None
     assert record.note == "Uploaded the PDF"
@@ -165,14 +165,14 @@ async def test_stored_record_editable_after_leaving_canvas(
         "777", 6021, dt_util.utcnow(), note="old"
     )
     await _call(hass, "set_assignment_stage", {"assignment_id": "777", "note": "new"})
-    assert coordinator.workflow.assignments["777"].note == "new"
+    assert coordinator.workflow.assignment(6021, "777").note == "new"
 
 
 async def test_set_followup_stage(
     hass: HomeAssistant, coordinator: CanvasDataUpdateCoordinator
 ) -> None:
     """Follow-up stage, method and note are stored; resolved stamps a time."""
-    fid = f"{AID}:late_work"
+    fid = f"6021:{AID}:late_work"
     assert coordinator.workflow.followups[fid].stage is FollowupStage.NEEDS_CONTACT
 
     await _call(
@@ -198,17 +198,19 @@ async def test_set_followup_stage_validation(
         await _call(
             hass,
             "set_followup_stage",
-            {"followup_id": f"{AID}:not_in_canvas", "stage": "resolved"},
+            {"followup_id": f"6021:{AID}:not_in_canvas", "stage": "resolved"},
         )
     assert err.value.translation_key == "unknown_followup"
     with pytest.raises(ServiceValidationError) as err:
-        await _call(hass, "set_followup_stage", {"followup_id": f"{AID}:late_work"})
+        await _call(
+            hass, "set_followup_stage", {"followup_id": f"6021:{AID}:late_work"}
+        )
     assert err.value.translation_key == "nothing_to_set"
     with pytest.raises(vol.Invalid):
         await _call(
             hass,
             "set_followup_stage",
-            {"followup_id": f"{AID}:late_work", "method": "carrier_pigeon"},
+            {"followup_id": f"6021:{AID}:late_work", "method": "carrier_pigeon"},
         )
 
 
@@ -228,7 +230,41 @@ async def test_non_admin_user_can_call_services(
     await _call(
         hass,
         "set_followup_stage",
-        {"followup_id": f"{AID}:late_work", "stage": "contacted"},
+        {"followup_id": f"6021:{AID}:late_work", "stage": "contacted"},
         context=context,
     )
-    assert coordinator.workflow.assignments[AID].stage is Stage.WORKING
+    assert coordinator.workflow.assignment(6021, AID).stage is Stage.WORKING
+
+
+async def test_followup_method_can_be_cleared(
+    hass: HomeAssistant, coordinator: CanvasDataUpdateCoordinator
+) -> None:
+    """An empty method clears it."""
+    fid = f"6021:{AID}:late_work"
+    await _call(hass, "set_followup_stage", {"followup_id": fid, "method": "email"})
+    await _call(hass, "set_followup_stage", {"followup_id": fid, "method": ""})
+    assert coordinator.workflow.followups[fid].method is None
+
+
+async def test_assignment_shared_by_siblings_needs_student_id(
+    hass: HomeAssistant, coordinator: CanvasDataUpdateCoordinator
+) -> None:
+    """With two students on one assignment id, the student must be given."""
+    await coordinator.workflow.async_set_assignment(
+        AID, 4899, dt_util.utcnow(), note="sibling"
+    )
+    with pytest.raises(ServiceValidationError) as err:
+        await _call(
+            hass, "set_assignment_stage", {"assignment_id": AID, "stage": "working"}
+        )
+    assert err.value.translation_key == "ambiguous_assignment"
+
+    await _call(
+        hass,
+        "set_assignment_stage",
+        {"assignment_id": AID, "student_id": 6021, "stage": "working"},
+    )
+    mine = coordinator.workflow.assignment(6021, AID)
+    theirs = coordinator.workflow.assignment(4899, AID)
+    assert mine is not None and mine.stage is Stage.WORKING
+    assert theirs is not None and theirs.stage is Stage.NOT_STARTED

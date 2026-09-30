@@ -134,6 +134,10 @@
           "name": "Assignment ID",
           "description": "The Canvas assignment ID (the to-do item's uid)."
         },
+        "student_id": {
+          "name": "Student ID",
+          "description": "The Canvas student (observee) id. Only needed when two students share the assignment; the card sends it automatically."
+        },
         "stage": {
           "name": "Stage",
           "description": "Where the student says the work is."
@@ -154,7 +158,7 @@
         },
         "followup_id": {
           "name": "Follow-up ID",
-          "description": "The follow-up id: the assignment ID and reason, e.g. 5506356:late_work."
+          "description": "The follow-up id: student ID, assignment ID and reason, e.g. 6021:5506356:late_work."
         },
         "stage": {
           "name": "Stage",
@@ -162,7 +166,7 @@
         },
         "method": {
           "name": "Method",
-          "description": "How the teacher was contacted."
+          "description": "How the teacher was contacted. Send an empty value to clear it."
         },
         "note": {
           "name": "Note",
@@ -183,6 +187,9 @@
     },
     "nothing_to_set": {
       "message": "Nothing to change: give at least one of {fields}."
+    },
+    "ambiguous_assignment": {
+      "message": "Assignment {assignment_id} belongs to more than one student; give student_id."
     }
   }
 }

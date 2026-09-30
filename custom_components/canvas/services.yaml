@@ -10,6 +10,12 @@ set_assignment_stage:
       example: "5506356"
       selector:
         text:
+    student_id:
+      required: false
+      example: 6021
+      selector:
+        number:
+          mode: box
     stage:
       required: false
       selector:
@@ -35,7 +41,7 @@ set_followup_stage:
           integration: canvas
     followup_id:
       required: true
-      example: "5506356:late_work"
+      example: "6021:5506356:late_work"
       selector:
         text:
     stage:

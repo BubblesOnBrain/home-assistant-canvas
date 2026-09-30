@@ -217,6 +217,15 @@ def should_prune(
     return last_seen_at is None or now - last_seen_at > prune_after
 
 
-def followup_id(assignment_id: str, reason: FollowupReason) -> str:
+def record_key(student_id: int, assignment_id: str) -> str:
+    """Return the storage key for a student's assignment record.
+
+    Canvas assignment ids are per course, not per student, so two students in
+    the same class (observed by one parent) need separate records.
+    """
+    return f"{student_id}:{assignment_id}"
+
+
+def followup_id(student_id: int, assignment_id: str, reason: FollowupReason) -> str:
     """Return the storage key for a follow-up."""
-    return f"{assignment_id}:{reason.value}"
+    return f"{record_key(student_id, assignment_id)}:{reason.value}"

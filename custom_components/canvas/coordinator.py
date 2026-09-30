@@ -83,8 +83,14 @@ class CanvasDataUpdateCoordinator(DataUpdateCoordinator[CanvasData]):
         )
 
     def _reconcile_workflow(self, data: CanvasData) -> None:
-        """Update follow-ups and snapshots from a successful fetch."""
-        self.workflow.reconcile(data, dt_util.utcnow(), *self.grace_windows)
+        """Update follow-ups and snapshots from a successful fetch.
+
+        A bug or bad stored value here must not stop Canvas data updating.
+        """
+        try:
+            self.workflow.reconcile(data, dt_util.utcnow(), *self.grace_windows)
+        except Exception:
+            _LOGGER.exception("Error updating the Canvas workflow records")
 
     @callback
     def async_workflow_changed(self, *_: object) -> None:
