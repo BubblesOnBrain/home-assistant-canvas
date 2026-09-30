@@ -28,13 +28,22 @@ from .api import CanvasApiClient
 from .const import (
     CONF_ACCESS_TOKEN,
     CONF_BASE_URL,
+    CONF_ESCALATION_THRESHOLD,
     CONF_ONLINE_GRACE_HOURS,
     CONF_PAPER_GRACE_DAYS,
+    CONF_QUIZ_LEAD_DAYS,
+    CONF_TEST_LEAD_DAYS,
+    DEFAULT_ESCALATION_THRESHOLD,
     DEFAULT_ONLINE_GRACE_HOURS,
     DEFAULT_PAPER_GRACE_DAYS,
+    DEFAULT_QUIZ_LEAD_DAYS,
+    DEFAULT_TEST_LEAD_DAYS,
     DOMAIN,
+    ESCALATION_THRESHOLD_RANGE,
     ONLINE_GRACE_HOURS_RANGE,
     PAPER_GRACE_DAYS_RANGE,
+    QUIZ_LEAD_DAYS_RANGE,
+    TEST_LEAD_DAYS_RANGE,
 )
 from .exceptions import (
     CanvasAuthError,
@@ -245,6 +254,24 @@ class CanvasOptionsFlowHandler(OptionsFlow):
                             CONF_PAPER_GRACE_DAYS, DEFAULT_PAPER_GRACE_DAYS
                         ),
                     ): _whole_number(PAPER_GRACE_DAYS_RANGE, "d"),
+                    vol.Required(
+                        CONF_QUIZ_LEAD_DAYS,
+                        default=options.get(
+                            CONF_QUIZ_LEAD_DAYS, DEFAULT_QUIZ_LEAD_DAYS
+                        ),
+                    ): _whole_number(QUIZ_LEAD_DAYS_RANGE, "d"),
+                    vol.Required(
+                        CONF_TEST_LEAD_DAYS,
+                        default=options.get(
+                            CONF_TEST_LEAD_DAYS, DEFAULT_TEST_LEAD_DAYS
+                        ),
+                    ): _whole_number(TEST_LEAD_DAYS_RANGE, "d"),
+                    vol.Required(
+                        CONF_ESCALATION_THRESHOLD,
+                        default=options.get(
+                            CONF_ESCALATION_THRESHOLD, DEFAULT_ESCALATION_THRESHOLD
+                        ),
+                    ): _whole_number(ESCALATION_THRESHOLD_RANGE, "%"),
                 }
             ),
         )

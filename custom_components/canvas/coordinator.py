@@ -14,10 +14,16 @@ from homeassistant.util import dt as dt_util
 
 from .api import CanvasApiClient
 from .const import (
+    CONF_ESCALATION_THRESHOLD,
     CONF_ONLINE_GRACE_HOURS,
     CONF_PAPER_GRACE_DAYS,
+    CONF_QUIZ_LEAD_DAYS,
+    CONF_TEST_LEAD_DAYS,
+    DEFAULT_ESCALATION_THRESHOLD,
     DEFAULT_ONLINE_GRACE_HOURS,
     DEFAULT_PAPER_GRACE_DAYS,
+    DEFAULT_QUIZ_LEAD_DAYS,
+    DEFAULT_TEST_LEAD_DAYS,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
 )
@@ -39,6 +45,7 @@ from .models import (
     CanvasObservee,
 )
 from .store import CanvasWorkflowStore
+from .workflow import AssignmentKind
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -88,6 +95,24 @@ class CanvasDataUpdateCoordinator(DataUpdateCoordinator[CanvasData]):
             timedelta(
                 days=options.get(CONF_PAPER_GRACE_DAYS, DEFAULT_PAPER_GRACE_DAYS)
             ),
+        )
+
+    def lead_time(self, kind: AssignmentKind) -> timedelta:
+        """Return how far ahead a quiz or test shows up to study for."""
+        options = self.entry.options
+        if kind is AssignmentKind.TEST:
+            return timedelta(
+                days=options.get(CONF_TEST_LEAD_DAYS, DEFAULT_TEST_LEAD_DAYS)
+            )
+        return timedelta(days=options.get(CONF_QUIZ_LEAD_DAYS, DEFAULT_QUIZ_LEAD_DAYS))
+
+    @property
+    def escalation_threshold(self) -> float:
+        """Return the percentage below which a grade is flagged (C or lower)."""
+        return float(
+            self.entry.options.get(
+                CONF_ESCALATION_THRESHOLD, DEFAULT_ESCALATION_THRESHOLD
+            )
         )
 
     def _reconcile_workflow(self, data: CanvasData) -> None:

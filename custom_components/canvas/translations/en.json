@@ -52,14 +52,20 @@
     "step": {
       "init": {
         "title": "Canvas LMS Options",
-        "description": "How long to wait for Canvas to show work the student marked \"I submitted it\" before flagging it and opening a follow-up.",
+        "description": "How long to wait for Canvas to show work the student marked \"I submitted it\", how early quizzes and tests show up to study for, and which grades to flag.",
         "data": {
           "online_grace_hours": "Online work grace period (hours)",
-          "paper_grace_days": "Paper work grace period (days)"
+          "paper_grace_days": "Paper work grace period (days)",
+          "quiz_lead_days": "Quiz study lead time (days)",
+          "test_lead_days": "Test study lead time (days)",
+          "escalation_threshold": "Flag grades below (%)"
         },
         "data_description": {
           "online_grace_hours": "Online submissions usually appear in Canvas within minutes. Default 12 hours.",
-          "paper_grace_days": "Paper work only appears once the teacher enters a grade. Default 7 days."
+          "paper_grace_days": "Paper work only appears once the teacher enters a grade. Default 7 days.",
+          "quiz_lead_days": "Quizzes appear in the assessments list this many days before they happen. Default 3.",
+          "test_lead_days": "Tests appear in the assessments list this many days before they happen. Default 7.",
+          "escalation_threshold": "Grades below this percentage are flagged for attention. Default 80 (a C or lower)."
         }
       }
     }
@@ -82,7 +88,10 @@
         "not_started": "Not started",
         "working": "Working on it",
         "done_not_submitted": "Done – needs submitting",
-        "submitted_claimed": "I submitted it"
+        "submitted_claimed": "I submitted it",
+        "studying": "Studying",
+        "ready": "Ready",
+        "needs_makeup": "Missed it – needs make-up"
       }
     },
     "followup_stage": {
@@ -103,12 +112,14 @@
       "options": {
         "late_work": "Late work",
         "not_in_canvas": "Not in Canvas",
-        "paper_not_graded": "Paper not graded"
+        "paper_not_graded": "Paper not graded",
+        "makeup": "Make-up needed"
       }
     },
     "display_state": {
       "options": {
         "confirmed": "In Canvas",
+        "needs_makeup": "Make-up needed",
         "not_in_canvas": "Not in Canvas",
         "claimed_pending": "Submitted?",
         "paper_not_graded": "Paper not graded",
@@ -117,14 +128,38 @@
         "zeroed": "Zero",
         "missing": "Missing",
         "working": "Working on it",
+        "awaiting_grade": "Awaiting grade",
+        "studying": "Studying",
+        "ready": "Ready",
         "not_started": "Not started"
+      }
+    },
+    "assignment_kind": {
+      "options": {
+        "auto": "Automatic",
+        "homework": "Homework",
+        "quiz": "Quiz",
+        "test": "Test"
+      }
+    },
+    "review_role": {
+      "options": {
+        "student": "Student",
+        "parent": "Parent"
+      }
+    },
+    "close_reason": {
+      "options": {
+        "feedback_received": "Teacher feedback received",
+        "not_graded": "Not graded",
+        "other": "Other"
       }
     }
   },
   "services": {
     "set_assignment_stage": {
       "name": "Set assignment stage",
-      "description": "Set the student's own stage and/or note on a Canvas assignment. This never marks the assignment complete; only Canvas can.",
+      "description": "Set the student's own stage, note and/or kind on a Canvas assignment. This never marks the assignment complete; only Canvas can.",
       "fields": {
         "config_entry_id": {
           "name": "Canvas account",
@@ -140,11 +175,15 @@
         },
         "stage": {
           "name": "Stage",
-          "description": "Where the student says the work is."
+          "description": "Where the student says the work is. Homework uses not started, working, done and submitted; quizzes and tests use not started, studying, ready and needs make-up."
         },
         "note": {
           "name": "Note",
           "description": "Plain text, up to 500 characters. Leave out to keep the current note; send an empty value to clear it."
+        },
+        "kind": {
+          "name": "Kind",
+          "description": "Correct whether this is homework, a quiz or a test. Automatic goes back to the integration's own classification."
         }
       }
     },
@@ -171,6 +210,62 @@
         "note": {
           "name": "Note",
           "description": "Plain text, up to 500 characters. Leave out to keep the current note; send an empty value to clear it."
+        }
+      }
+    },
+    "review_assignment": {
+      "name": "Review grade",
+      "description": "Mark a graded assignment reviewed by the student or a parent. The Home Assistant user who calls it is recorded.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Canvas account",
+          "description": "The Canvas integration entry. Optional when only one Canvas account is set up."
+        },
+        "assignment_id": {
+          "name": "Assignment ID",
+          "description": "The Canvas assignment ID (the to-do item's uid)."
+        },
+        "student_id": {
+          "name": "Student ID",
+          "description": "The Canvas student (observee) id. Only needed when two students share the assignment; the card sends it automatically."
+        },
+        "role": {
+          "name": "Role",
+          "description": "Who is reviewing: the student first, then a parent. Default student."
+        },
+        "undo": {
+          "name": "Undo",
+          "description": "Clear the review instead. Undoing the student's review also clears the parent's."
+        }
+      }
+    },
+    "close_assignment": {
+      "name": "Close without grade",
+      "description": "Stop waiting on the teacher for work that won't get a grade. A grade that arrives later reopens it for review.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Canvas account",
+          "description": "The Canvas integration entry. Optional when only one Canvas account is set up."
+        },
+        "assignment_id": {
+          "name": "Assignment ID",
+          "description": "The Canvas assignment ID (the to-do item's uid)."
+        },
+        "student_id": {
+          "name": "Student ID",
+          "description": "The Canvas student (observee) id. Only needed when two students share the assignment; the card sends it automatically."
+        },
+        "reason": {
+          "name": "Reason",
+          "description": "Why it's closed. Default other."
+        },
+        "note": {
+          "name": "Note",
+          "description": "Plain text, up to 500 characters."
+        },
+        "undo": {
+          "name": "Undo",
+          "description": "Reopen it: it goes back to waiting on the teacher."
         }
       }
     }

@@ -34,7 +34,7 @@ ONLINE_GRACE_HOURS_RANGE: Final = (1, 72)
 PAPER_GRACE_DAYS_RANGE: Final = (1, 21)
 
 STORAGE_VERSION: Final = 1
-STORAGE_MINOR_VERSION: Final = 1
+STORAGE_MINOR_VERSION: Final = 2
 STORAGE_KEY_PREFIX: Final = f"{DOMAIN}.workflow"
 # Debounce for saves made by the reconcile step (user edits save immediately)
 STORAGE_SAVE_DELAY: Final = 2
@@ -46,6 +46,20 @@ FOLLOWUP_VISIBLE_DAYS: Final = 7
 # How often time-based states (grace windows) are re-evaluated between fetches
 WORKFLOW_TICK_MINUTES: Final = 15
 FOLLOWUP_UID_PREFIX: Final = "followup:"
+# Graded work from before review tracking started goes back this far.
+REVIEW_BACKFILL_DAYS: Final = 14
+# Grades are kept this long for trends (a school year and then some).
+GRADE_LOG_DAYS: Final = 400
+
+CONF_QUIZ_LEAD_DAYS: Final = "quiz_lead_days"
+CONF_TEST_LEAD_DAYS: Final = "test_lead_days"
+CONF_ESCALATION_THRESHOLD: Final = "escalation_threshold"
+DEFAULT_QUIZ_LEAD_DAYS: Final = 3
+DEFAULT_TEST_LEAD_DAYS: Final = 7
+DEFAULT_ESCALATION_THRESHOLD: Final = 80
+QUIZ_LEAD_DAYS_RANGE: Final = (1, 14)
+TEST_LEAD_DAYS_RANGE: Final = (1, 30)
+ESCALATION_THRESHOLD_RANGE: Final = (50, 100)
 
 # HTTP Headers
 HEADER_ACCEPT: Final = "Accept"

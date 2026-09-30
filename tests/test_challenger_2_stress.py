@@ -423,7 +423,13 @@ async def test_options_flow_init_and_create_entry(
         user_input={},
     )
     assert result2["type"] is FlowResultType.CREATE_ENTRY
-    assert result2["data"] == {"online_grace_hours": 12, "paper_grace_days": 7}
+    assert result2["data"] == {
+        "online_grace_hours": 12,
+        "paper_grace_days": 7,
+        "quiz_lead_days": 3,
+        "test_lead_days": 7,
+        "escalation_threshold": 80,
+    }
 
 
 # ============================================================================

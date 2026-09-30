@@ -26,11 +26,24 @@ set_assignment_stage:
             - working
             - done_not_submitted
             - submitted_claimed
+            - studying
+            - ready
+            - needs_makeup
     note:
       required: false
       selector:
         text:
           multiline: true
+    kind:
+      required: false
+      selector:
+        select:
+          translation_key: assignment_kind
+          options:
+            - auto
+            - homework
+            - quiz
+            - test
 
 set_followup_stage:
   fields:
@@ -67,3 +80,74 @@ set_followup_stage:
       selector:
         text:
           multiline: true
+
+review_assignment:
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: canvas
+    assignment_id:
+      required: true
+      example: "5506356"
+      selector:
+        text:
+    student_id:
+      required: false
+      example: 6021
+      selector:
+        number:
+          mode: box
+    role:
+      required: false
+      default: student
+      selector:
+        select:
+          translation_key: review_role
+          options:
+            - student
+            - parent
+    undo:
+      required: false
+      default: false
+      selector:
+        boolean:
+
+close_assignment:
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: canvas
+    assignment_id:
+      required: true
+      example: "5506356"
+      selector:
+        text:
+    student_id:
+      required: false
+      example: 6021
+      selector:
+        number:
+          mode: box
+    reason:
+      required: false
+      selector:
+        select:
+          translation_key: close_reason
+          options:
+            - feedback_received
+            - not_graded
+            - other
+    note:
+      required: false
+      selector:
+        text:
+          multiline: true
+    undo:
+      required: false
+      default: false
+      selector:
+        boolean:

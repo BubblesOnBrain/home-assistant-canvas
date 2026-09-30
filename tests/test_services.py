@@ -27,6 +27,8 @@ from custom_components.canvas.const import (
 )
 from custom_components.canvas.coordinator import CanvasDataUpdateCoordinator
 from custom_components.canvas.workflow import (
+    AssignmentKind,
+    CloseReason,
     FollowupMethod,
     FollowupStage,
     Stage,
@@ -268,3 +270,87 @@ async def test_assignment_shared_by_siblings_needs_student_id(
     theirs = coordinator.workflow.assignment(4899, AID)
     assert mine is not None and mine.stage is Stage.WORKING
     assert theirs is not None and theirs.stage is Stage.NOT_STARTED
+
+
+async def test_review_assignment_records_user_name(
+    hass: HomeAssistant,
+    coordinator: CanvasDataUpdateCoordinator,
+    hass_read_only_user: User,
+    hass_admin_user: User,
+) -> None:
+    """Anyone can review; the calling user's name is kept for each role."""
+    await _call(
+        hass,
+        "review_assignment",
+        {"assignment_id": AID},
+        context=Context(user_id=hass_read_only_user.id),
+    )
+    record = coordinator.workflow.assignment(6021, AID)
+    assert record.student_reviewed_by == hass_read_only_user.name
+    assert record.student_reviewed_at is not None
+    assert record.parent_reviewed_at is None
+
+    await _call(
+        hass,
+        "review_assignment",
+        {"assignment_id": AID, "role": "parent"},
+        context=Context(user_id=hass_admin_user.id),
+    )
+    assert record.parent_reviewed_by == hass_admin_user.name
+
+    await _call(hass, "review_assignment", {"assignment_id": AID, "undo": True})
+    assert record.student_reviewed_at is None
+    assert record.parent_reviewed_at is None
+
+    # Called without a user (e.g. an automation): no name recorded.
+    await _call(hass, "review_assignment", {"assignment_id": AID})
+    assert record.student_reviewed_at is not None
+    assert record.student_reviewed_by is None
+
+
+async def test_close_assignment_and_reopen(
+    hass: HomeAssistant,
+    coordinator: CanvasDataUpdateCoordinator,
+    hass_read_only_user: User,
+) -> None:
+    """Close without grade stores reason, note and who; undo reopens."""
+    await _call(
+        hass,
+        "close_assignment",
+        {"assignment_id": AID, "reason": "not_graded", "note": "  Not for a grade "},
+        context=Context(user_id=hass_read_only_user.id),
+    )
+    record = coordinator.workflow.assignment(6021, AID)
+    assert record.closed_reason is CloseReason.NOT_GRADED
+    assert record.closed_note == "Not for a grade"
+    assert record.closed_by == hass_read_only_user.name
+
+    await _call(hass, "close_assignment", {"assignment_id": AID, "undo": True})
+    assert record.closed_at is None
+
+    with pytest.raises(ServiceValidationError) as err:
+        await _call(hass, "close_assignment", {"assignment_id": AID, "note": "x" * 501})
+    assert err.value.translation_key == "note_too_long"
+    with pytest.raises(vol.Invalid):
+        await _call(
+            hass, "close_assignment", {"assignment_id": AID, "reason": "lost_it"}
+        )
+    with pytest.raises(ServiceValidationError) as err:
+        await _call(hass, "review_assignment", {"assignment_id": "999"})
+    assert err.value.translation_key == "unknown_assignment"
+
+
+async def test_set_assignment_kind_and_auto(
+    hass: HomeAssistant, coordinator: CanvasDataUpdateCoordinator
+) -> None:
+    """The kind can be corrected alone, and "auto" clears the correction."""
+    await _call(hass, "set_assignment_stage", {"assignment_id": AID, "kind": "quiz"})
+    record = coordinator.workflow.assignment(6021, AID)
+    assert record.kind_override is AssignmentKind.QUIZ
+    assert record.stage is Stage.NOT_STARTED
+    await _call(hass, "set_assignment_stage", {"assignment_id": AID, "kind": "auto"})
+    assert record.kind_override is None
+    with pytest.raises(vol.Invalid):
+        await _call(
+            hass, "set_assignment_stage", {"assignment_id": AID, "kind": "essay"}
+        )
