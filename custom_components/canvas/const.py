@@ -22,6 +22,8 @@ DEFAULT_PER_PAGE: Final = 100  # Alias for DEFAULT_PAGE_SIZE
 DEFAULT_STALE_DAYS_THRESHOLD: Final = 180
 # Days finished assignments stay on the To-Do list (shown as completed)
 DONE_RETENTION_DAYS: Final = 7
+# Days ahead included in the upcoming_items attribute
+UPCOMING_WINDOW_DAYS: Final = 14
 
 # HTTP Headers
 HEADER_ACCEPT: Final = "Accept"

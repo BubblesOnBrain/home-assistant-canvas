@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import logging
 from typing import Any, Self
 from uuid import uuid4
@@ -22,7 +22,7 @@ from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import CanvasConfigEntry
-from .const import CONF_BASE_URL, DOMAIN
+from .const import CONF_BASE_URL, DOMAIN, UPCOMING_WINDOW_DAYS
 from .coordinator import CanvasDataUpdateCoordinator
 from .filtering import (
     SubmissionStatus,
@@ -99,6 +99,10 @@ class CanvasTodoListEntity(
 
     _attr_has_entity_name = True
     _attr_translation_key = "assignments"
+    # Item lists are for dashboards/automations; keep them out of the recorder.
+    _unrecorded_attributes = frozenset(
+        {"attention_items", "upcoming_items", "late_items"}
+    )
     _attr_supported_features = (
         TodoListEntityFeature.CREATE_TODO_ITEM
         | TodoListEntityFeature.UPDATE_TODO_ITEM
@@ -203,6 +207,11 @@ class CanvasTodoListEntity(
         items: list[TodoItem] = []
         counts: dict[SubmissionStatus, int] = {}
         late_items: list[dict[str, Any]] = []
+        attention_items: list[dict[str, Any]] = []
+        upcoming_items: list[dict[str, Any]] = []
+        undated_count = 0
+        now = datetime.now(timezone.utc)
+        upcoming_cutoff = now + timedelta(days=UPCOMING_WINDOW_DAYS)
         course_map = self._get_course_map()
         assignments = self.coordinator.data.assignments_by_student.get(
             self.student.id, []
@@ -220,16 +229,34 @@ class CanvasTodoListEntity(
             course_prefix = f"[{course.name}] " if course and course.name else ""
             canvas_status = submission_status(assignment)
             on_paper = not is_online_submission_assignment(assignment)
+
+            # Undated, never-submitted items are mostly stale course-template
+            # clutter; count them but keep them off the list.
+            if canvas_status is SubmissionStatus.UPCOMING and assignment.due_at is None:
+                undated_count += 1
+                continue
+
             counts[canvas_status] = counts.get(canvas_status, 0) + 1
+            compact = {
+                "uid": uid,
+                "course": course.name if course else None,
+                "class": (course.name.split(" - ")[0].strip() if course else ""),
+                "assignment": assignment.name.strip(),
+                "status": canvas_status.value,
+                "paper": on_paper,
+                "due": assignment.due_at.isoformat() if assignment.due_at else None,
+                "url": assignment.html_url,
+            }
             if canvas_status is SubmissionStatus.LATE:
-                late_items.append(
-                    {
-                        "uid": uid,
-                        "course": course.name if course else None,
-                        "assignment": assignment.name,
-                        "url": assignment.html_url,
-                    }
-                )
+                late_items.append(compact)
+            elif canvas_status in (SubmissionStatus.MISSING, SubmissionStatus.ZEROED):
+                attention_items.append(compact)
+            elif (
+                canvas_status is SubmissionStatus.UPCOMING
+                and assignment.due_at is not None
+                and assignment.due_at <= upcoming_cutoff
+            ):
+                upcoming_items.append(compact)
             default_summary = (
                 f"{STATUS_PREFIX.get(canvas_status, '')}{course_prefix}"
                 f"{assignment.name}{' 📝' if on_paper else ''}"
@@ -252,12 +279,7 @@ class CanvasTodoListEntity(
             )
             description = overrides.get(
                 "description",
-                "\n".join(
-                    filter(
-                        None,
-                        [status_line, assignment.description or assignment.html_url],
-                    )
-                ),
+                "\n".join(filter(None, [status_line, assignment.html_url])),
             )
 
             items.append(
@@ -282,7 +304,12 @@ class CanvasTodoListEntity(
                 f"{status.value}_count": counts.get(status, 0)
                 for status in SubmissionStatus
             },
+            "undated_count": undated_count,
             "late_items": late_items,
+            "attention_items": sorted(
+                attention_items, key=lambda i: i["due"] or "9999"
+            ),
+            "upcoming_items": sorted(upcoming_items, key=lambda i: i["due"] or "9999"),
         }
 
     @staticmethod

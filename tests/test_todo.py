@@ -201,8 +201,10 @@ async def test_todo_items_projection_and_attributes(
     assert items[0]["uid"] == "134664"
     assert _base(items[0]["summary"]) == "[AP US History] Chapter 1 Reflection"
     assert items[0]["status"] == "needs_action"
-    assert "Read Chapter 1 and submit reflections." in items[0]["description"]
+    # Descriptions are compact: status line + link, never the teacher's HTML
     assert items[0]["description"].startswith("Status: ")
+    assert "assignments/134664" in items[0]["description"]
+    assert "Read Chapter 1" not in items[0]["description"]
     assert "2026-09-01" in items[0]["due"]
 
 
@@ -671,8 +673,19 @@ async def test_todo_items_ordered_by_due_date(
         "[AP US History] Early Assignment",
         "Mid Assignment",
         "[AP US History] Late Assignment",
-        "[AP US History] Undated Assignment",
     ]
+
+    # Undated never-submitted item is counted, not listed; compact lists exposed
+    attrs = entity.extra_state_attributes or {}
+    assert attrs["undated_count"] == 1
+    listed = attrs["attention_items"] + attrs["upcoming_items"]
+    assert all(
+        {"class", "assignment", "status", "due", "url", "paper"} <= set(i)
+        for i in listed
+    )
+    assert [i["due"] for i in attrs["attention_items"]] == sorted(
+        i["due"] for i in attrs["attention_items"]
+    )
 
 
 async def test_todo_filters_in_class_and_paper_assignments(
