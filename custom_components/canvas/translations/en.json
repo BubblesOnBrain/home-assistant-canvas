@@ -52,7 +52,15 @@
     "step": {
       "init": {
         "title": "Canvas LMS Options",
-        "description": "Configure Canvas LMS integration options."
+        "description": "How long to wait for Canvas to show work the student marked \"I submitted it\" before flagging it and opening a follow-up.",
+        "data": {
+          "online_grace_hours": "Online work grace period (hours)",
+          "paper_grace_days": "Paper work grace period (days)"
+        },
+        "data_description": {
+          "online_grace_hours": "Online submissions usually appear in Canvas within minutes. Default 12 hours.",
+          "paper_grace_days": "Paper work only appears once the teacher enters a grade. Default 7 days."
+        }
       }
     }
   },

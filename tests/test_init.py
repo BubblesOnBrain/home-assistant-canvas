@@ -137,10 +137,12 @@ async def test_async_unload_entry_success(
 
     assert mock_config_entry.state is ConfigEntryState.LOADED
 
-    unload_result = await async_unload_entry(hass, mock_config_entry)
+    # Unload through Home Assistant so entry cleanup (timers) also runs.
+    unload_result = await hass.config_entries.async_unload(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
     assert unload_result is True
+    assert mock_config_entry.state is ConfigEntryState.NOT_LOADED
 
 
 async def test_async_reload_entry_success(
