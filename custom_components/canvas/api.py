@@ -18,6 +18,7 @@ from .const import (
     DEFAULT_ACCEPT_TYPE,
     DEFAULT_PAGE_SIZE,
     DEFAULT_USER_AGENT,
+    ENDPOINT_COURSE_ASSIGNMENT_GROUPS,
     ENDPOINT_COURSE_STUDENT_SUBMISSIONS,
     ENDPOINT_USER_COURSES,
     ENDPOINT_USERS_OBSERVEES,
@@ -354,3 +355,14 @@ class CanvasApiClient:
                 assignment = CanvasAssignment.from_dict(asg_data, submission=sub)
                 assignments.append(assignment)
         return assignments
+
+    async def async_get_assignment_groups(self, course_id: int) -> dict[int, str]:
+        """Return a course's assignment groups as {group id: name}."""
+        endpoint = ENDPOINT_COURSE_ASSIGNMENT_GROUPS.format(course_id=course_id)
+        params: list[tuple[str, str]] = [("per_page", str(DEFAULT_PAGE_SIZE))]
+        items = await self._request_paginated(endpoint, params=params)
+        return {
+            int(item["id"]): str(item.get("name") or "")
+            for item in items
+            if isinstance(item, dict) and "id" in item
+        }

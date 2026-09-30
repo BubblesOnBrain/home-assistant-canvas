@@ -336,6 +336,8 @@ class CanvasAssignment:
     workflow_state: str = "published"
     html_url: str | None = None
     submission: CanvasSubmission | None = None
+    assignment_group_id: int | None = None
+    is_quiz_assignment: bool = False
 
     @classmethod
     def from_dict(
@@ -363,6 +365,13 @@ class CanvasAssignment:
             workflow_state=str(data.get("workflow_state") or "published"),
             html_url=data.get("html_url"),
             submission=sub,
+            assignment_group_id=(
+                int(data["assignment_group_id"])
+                if data.get("assignment_group_id") is not None
+                else None
+            ),
+            is_quiz_assignment=bool(data.get("is_quiz_assignment"))
+            or "online_quiz" in sub_types,
         )
 
 
@@ -385,3 +394,24 @@ class CanvasData:
     assignments_by_student: dict[int, list[CanvasAssignment]] = field(
         default_factory=dict
     )
+    # Every current-term assignment, including finished work past the to-do
+    # list's retention window (for "waiting on teacher" and grade review).
+    term_assignments_by_student: dict[int, list[CanvasAssignment]] = field(
+        default_factory=dict
+    )
+    # Course id -> assignment group id -> group name (e.g. "Tests", "Major").
+    assignment_groups: dict[int, dict[int, str]] = field(default_factory=dict)
+
+    def term_assignments(self, student_id: int) -> list[CanvasAssignment]:
+        """Return all current-term assignments for a student."""
+        if student_id in self.term_assignments_by_student:
+            return self.term_assignments_by_student[student_id]
+        return self.assignments_by_student.get(student_id, [])
+
+    def group_name(self, assignment: CanvasAssignment) -> str:
+        """Return the assignment's group name, or "" if unknown."""
+        if assignment.assignment_group_id is None:
+            return ""
+        return self.assignment_groups.get(assignment.course_id, {}).get(
+            assignment.assignment_group_id, ""
+        )

@@ -66,6 +66,9 @@ ENDPOINT_USER_COURSES: Final = "/api/v1/users/{user_id}/courses"
 ENDPOINT_COURSE_STUDENT_SUBMISSIONS: Final = (
     "/api/v1/courses/{course_id}/students/submissions"
 )
+ENDPOINT_COURSE_ASSIGNMENT_GROUPS: Final = (
+    "/api/v1/courses/{course_id}/assignment_groups"
+)
 ENDPOINT_USER_MISSING_SUBMISSIONS: Final = "/api/v1/users/{user_id}/missing_submissions"
 
 # API Endpoint Aliases
