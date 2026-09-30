@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
 import logging
 
 from homeassistant.config_entries import ConfigEntry
@@ -14,10 +14,16 @@ from homeassistant.util import dt as dt_util
 
 from .api import CanvasApiClient
 from .const import (
+    CONF_ESCALATION_THRESHOLD,
     CONF_ONLINE_GRACE_HOURS,
     CONF_PAPER_GRACE_DAYS,
+    CONF_QUIZ_LEAD_DAYS,
+    CONF_TEST_LEAD_DAYS,
+    DEFAULT_ESCALATION_THRESHOLD,
     DEFAULT_ONLINE_GRACE_HOURS,
     DEFAULT_PAPER_GRACE_DAYS,
+    DEFAULT_QUIZ_LEAD_DAYS,
+    DEFAULT_TEST_LEAD_DAYS,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
 )
@@ -27,7 +33,11 @@ from .exceptions import (
     CanvasError,
     CanvasForbiddenError,
 )
-from .filtering import filter_active_courses, filter_pending_assignments
+from .filtering import (
+    filter_active_courses,
+    filter_pending_assignments,
+    filter_term_assignments,
+)
 from .models import (
     CanvasAssignment,
     CanvasCourse,
@@ -35,8 +45,11 @@ from .models import (
     CanvasObservee,
 )
 from .store import CanvasWorkflowStore
+from .workflow import AssignmentKind
 
 _LOGGER = logging.getLogger(__name__)
+
+ASSIGNMENT_GROUPS_TTL = timedelta(hours=12)
 
 
 class CanvasDataUpdateCoordinator(DataUpdateCoordinator[CanvasData]):
@@ -53,6 +66,8 @@ class CanvasDataUpdateCoordinator(DataUpdateCoordinator[CanvasData]):
         """Initialize the coordinator."""
         self.client = client
         self.entry = entry
+        # Course id -> (fetched at, {group id: name}); groups rarely change.
+        self._groups_cache: dict[int, tuple[datetime, dict[int, str]]] = {}
         # The student's own data (stages, notes, follow-ups); owned by the
         # integration and saved to .storage, never rebuilt from Canvas.
         self.workflow = (
@@ -82,6 +97,24 @@ class CanvasDataUpdateCoordinator(DataUpdateCoordinator[CanvasData]):
             ),
         )
 
+    def lead_time(self, kind: AssignmentKind) -> timedelta:
+        """Return how far ahead a quiz or test shows up to study for."""
+        options = self.entry.options
+        if kind is AssignmentKind.TEST:
+            return timedelta(
+                days=options.get(CONF_TEST_LEAD_DAYS, DEFAULT_TEST_LEAD_DAYS)
+            )
+        return timedelta(days=options.get(CONF_QUIZ_LEAD_DAYS, DEFAULT_QUIZ_LEAD_DAYS))
+
+    @property
+    def escalation_threshold(self) -> float:
+        """Return the percentage below which a grade is flagged (C or lower)."""
+        return float(
+            self.entry.options.get(
+                CONF_ESCALATION_THRESHOLD, DEFAULT_ESCALATION_THRESHOLD
+            )
+        )
+
     def _reconcile_workflow(self, data: CanvasData) -> None:
         """Update follow-ups and snapshots from a successful fetch.
 
@@ -103,6 +136,24 @@ class CanvasDataUpdateCoordinator(DataUpdateCoordinator[CanvasData]):
         if self.data is not None and self.last_update_success:
             self._reconcile_workflow(self.data)
         self.async_update_listeners()
+
+    async def _async_course_groups(self, course: CanvasCourse) -> dict[int, str]:
+        """Return a course's assignment groups, cached for a few hours.
+
+        Group names only refine how work is classified, so a failure here is
+        logged and never fails the fetch.
+        """
+        now = dt_util.utcnow()
+        cached = self._groups_cache.get(course.id)
+        if cached is not None and now - cached[0] < ASSIGNMENT_GROUPS_TTL:
+            return cached[1]
+        try:
+            groups = await self.client.async_get_assignment_groups(course.id)
+        except Exception as err:  # noqa: BLE001 - optional enrichment
+            _LOGGER.debug("No assignment groups for course %s: %s", course.id, err)
+            return cached[1] if cached is not None else {}
+        self._groups_cache[course.id] = (now, groups)
+        return groups
 
     async def _async_update_data(self) -> CanvasData:
         """Fetch Canvas data, then reconcile the student's workflow with it."""
@@ -129,10 +180,17 @@ class CanvasDataUpdateCoordinator(DataUpdateCoordinator[CanvasData]):
 
             courses_by_student: dict[int, list[CanvasCourse]] = {}
             assignments_by_student: dict[int, list[CanvasAssignment]] = {}
+            term_by_student: dict[int, list[CanvasAssignment]] = {}
+            assignment_groups: dict[int, dict[int, str]] = {}
 
             async def _fetch_student_data(
                 student: CanvasObservee,
-            ) -> tuple[int, list[CanvasCourse], list[CanvasAssignment]]:
+            ) -> tuple[
+                int,
+                list[CanvasCourse],
+                list[CanvasAssignment],
+                list[CanvasAssignment],
+            ]:
                 raw_courses = await self.client.async_get_student_courses(student.id)
                 active_courses = filter_active_courses(raw_courses)
 
@@ -156,31 +214,42 @@ class CanvasDataUpdateCoordinator(DataUpdateCoordinator[CanvasData]):
                         )
                         return []
 
-                course_results = await asyncio.gather(
-                    *(_fetch_course_assignments(course) for course in active_courses)
+                course_results, group_results = await asyncio.gather(
+                    asyncio.gather(
+                        *(_fetch_course_assignments(c) for c in active_courses)
+                    ),
+                    asyncio.gather(
+                        *(self._async_course_groups(c) for c in active_courses)
+                    ),
                 )
                 student_assignments: list[CanvasAssignment] = []
-                for course, raw_asgs in zip(
-                    active_courses, course_results, strict=True
+                term_assignments: list[CanvasAssignment] = []
+                for course, raw_asgs, groups in zip(
+                    active_courses, course_results, group_results, strict=True
                 ):
+                    assignment_groups[course.id] = groups
                     student_assignments.extend(
                         filter_pending_assignments(raw_asgs, course)
                     )
-                return student.id, active_courses, student_assignments
+                    term_assignments.extend(filter_term_assignments(raw_asgs, course))
+                return student.id, active_courses, student_assignments, term_assignments
 
             student_results = await asyncio.gather(
                 *(_fetch_student_data(student) for student in observees)
             )
 
-            for student_id, active_courses, student_assignments in student_results:
-                courses_by_student[student_id] = active_courses
-                assignments_by_student[student_id] = student_assignments
+            for student_id, courses, todo_list, term_list in student_results:
+                courses_by_student[student_id] = courses
+                assignments_by_student[student_id] = todo_list
+                term_by_student[student_id] = term_list
 
             return CanvasData(
                 user=user,
                 observees=tuple(observees),
                 courses_by_student=courses_by_student,
                 assignments_by_student=assignments_by_student,
+                term_assignments_by_student=term_by_student,
+                assignment_groups=assignment_groups,
             )
 
         except CanvasAuthError as err:

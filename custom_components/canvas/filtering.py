@@ -146,15 +146,16 @@ def filter_active_courses(
     return [c for c in courses if is_active_course(c, now=now)]
 
 
-def is_active_todo_assignment(
+def is_term_assignment(
     assignment: CanvasAssignment,
     course: CanvasCourse,
     now: datetime | None = None,
 ) -> bool:
-    """Return True if assignment is an actionable, pending task for the student.
+    """Return True if the assignment is real current-term work, done or not.
 
-    Discards non-graded placeholders, pre-term cloned syllabus templates,
-    and already assessed/excused items.
+    Discards non-graded placeholders, locked future work and pre-term cloned
+    syllabus templates. Finished work is kept (see is_active_todo_assignment
+    for the to-do list's shorter retention).
     """
     current_time = _to_utc(now) or datetime.now(timezone.utc)
 
@@ -198,6 +199,22 @@ def is_active_todo_assignment(
             if due_time < stale_boundary:
                 return False
 
+    return True
+
+
+def is_active_todo_assignment(
+    assignment: CanvasAssignment,
+    course: CanvasCourse,
+    now: datetime | None = None,
+) -> bool:
+    """Return True if assignment belongs on the to-do list.
+
+    Current-term work, minus finished work older than DONE_RETENTION_DAYS.
+    """
+    current_time = _to_utc(now) or datetime.now(timezone.utc)
+    if not is_term_assignment(assignment, course, now=current_time):
+        return False
+
     # 5. Finished work: keep briefly so the list shows it completed, then drop.
     #    Open work (upcoming, missing, zeroed) is always kept. The window runs
     #    from whichever came last (due, submitted, graded), so work turned in
@@ -216,6 +233,15 @@ def is_active_todo_assignment(
             return False
 
     return True
+
+
+def filter_term_assignments(
+    assignments: list[CanvasAssignment],
+    course: CanvasCourse,
+    now: datetime | None = None,
+) -> list[CanvasAssignment]:
+    """Filter assignments to current-term work, finished or not."""
+    return [a for a in assignments if is_term_assignment(a, course, now=now)]
 
 
 def filter_pending_assignments(

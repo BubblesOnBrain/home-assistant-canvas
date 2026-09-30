@@ -29,27 +29,39 @@ from .const import (
     CONF_BASE_URL,
     DOMAIN,
     FOLLOWUP_UID_PREFIX,
+    CLOSED_VISIBLE_DAYS,
     FOLLOWUP_VISIBLE_DAYS,
     UPCOMING_WINDOW_DAYS,
 )
 from .coordinator import CanvasDataUpdateCoordinator
 from .filtering import (
     SubmissionStatus,
-    is_actionable_todo_assignment,
-    is_done,
     is_online_submission_assignment,
     submission_status,
 )
-from .models import CanvasCourse, CanvasObservee
-from .store import FollowupRecord
+from .models import CanvasAssignment, CanvasCourse, CanvasObservee
+from .store import (
+    AssignmentRecord,
+    FollowupRecord,
+    assignment_graded,
+    assignment_kind,
+    in_review_window,
+    is_tracked,
+)
 from .workflow import (
     FOLLOWUP_PREFIX,
+    AssignmentKind,
+    Bucket,
     DisplayState,
     FollowupStage,
     Stage,
     display_state,
+    grade_percent,
+    is_escalated,
     is_overdue,
     summary_prefix,
+    work_bucket,
+    work_done,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -77,6 +89,97 @@ async def async_setup_entry(
     )
 
 
+# Lists shown on the dashboard, in the order the card shows them.
+_LISTED_BUCKETS: tuple[Bucket, ...] = (
+    Bucket.ATTENTION,
+    Bucket.UPCOMING,
+    Bucket.ASSESSMENT,
+    Bucket.WAITING,
+    Bucket.REVIEW,
+    Bucket.PARENT_REVIEW,
+    Bucket.CLOSED,
+)
+# Graded work is listed newest grade first; everything else by due date.
+_NEWEST_FIRST: dict[Bucket, str] = {
+    Bucket.REVIEW: "graded_at",
+    Bucket.PARENT_REVIEW: "student_reviewed_at",
+    Bucket.CLOSED: "closed_at",
+}
+
+
+def _reviewed_since(reviewed_at: datetime | None, graded_at: datetime | None) -> bool:
+    """Return True if a review covers the current grade.
+
+    A regrade after the review (Canvas moves graded_at) needs reviewing again.
+    """
+    if reviewed_at is None:
+        return False
+    return graded_at is None or reviewed_at >= graded_at
+
+
+def _closed_long_ago(record: AssignmentRecord | None, now: datetime) -> bool:
+    """Return True for work closed more than CLOSED_VISIBLE_DAYS ago."""
+    closed_at = record.closed_at if record else None
+    return closed_at is not None and now - closed_at > timedelta(
+        days=CLOSED_VISIBLE_DAYS
+    )
+
+
+def _iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def _sorted(bucket: Bucket, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sort one list for display."""
+    if (field := _NEWEST_FIRST.get(bucket)) is not None:
+        return sorted(items, key=lambda i: i[field] or "", reverse=True)
+    return sorted(items, key=lambda i: i["due"] or "9999")
+
+
+def _grade_fields(
+    assignment: CanvasAssignment,
+    graded: bool,
+    percent: float | None,
+    escalated: bool,
+) -> dict[str, Any]:
+    """Grade details for a compact item."""
+    sub = assignment.submission if graded else None
+    return {
+        "graded": graded,
+        "score": sub.score if sub else None,
+        "points_possible": assignment.points_possible,
+        "grade": sub.grade if sub else None,
+        "percent": percent,
+        "escalated": escalated,
+        "graded_at": _iso(sub.graded_at) if sub else None,
+    }
+
+
+def _review_fields(record: AssignmentRecord | None) -> dict[str, Any]:
+    """Review and close details for a compact item."""
+    if record is None:
+        return {
+            "student_reviewed_at": None,
+            "student_reviewed_by": None,
+            "parent_reviewed_at": None,
+            "parent_reviewed_by": None,
+            "closed_at": None,
+            "closed_by": None,
+            "closed_reason": None,
+            "closed_note": "",
+        }
+    return {
+        "student_reviewed_at": _iso(record.student_reviewed_at),
+        "student_reviewed_by": record.student_reviewed_by,
+        "parent_reviewed_at": _iso(record.parent_reviewed_at),
+        "parent_reviewed_by": record.parent_reviewed_by,
+        "closed_at": _iso(record.closed_at),
+        "closed_by": record.closed_by,
+        "closed_reason": record.closed_reason.value if record.closed_reason else None,
+        "closed_note": record.closed_note,
+    }
+
+
 def _followup_visible(followup: FollowupRecord, now: datetime) -> bool:
     """Open follow-ups always show; resolved ones for a week."""
     if followup.stage is not FollowupStage.RESOLVED:
@@ -96,7 +199,17 @@ class CanvasTodoListEntity(
     _attr_translation_key = "assignments"
     # Item lists are for dashboards/automations; keep them out of the recorder.
     _unrecorded_attributes = frozenset(
-        {"attention_items", "upcoming_items", "late_items", "followup_items"}
+        {
+            "attention_items",
+            "upcoming_items",
+            "assessment_items",
+            "waiting_items",
+            "review_items",
+            "parent_review_items",
+            "closed_items",
+            "late_items",
+            "followup_items",
+        }
     )
     # Only follow-up tasks can be ticked. Canvas owns assignments; personal
     # reminders belong in a separate (e.g. Local To-do) list.
@@ -135,46 +248,55 @@ class CanvasTodoListEntity(
         return {course.id: course for course in courses}
 
     def _update_todo_items(self) -> None:
-        """Combine Canvas assignments and workflow records into TodoItems."""
+        """Combine Canvas assignments and workflow records into TodoItems.
+
+        To-do items come from the to-do list (open work plus a week of
+        finished work). The dashboard lists come from all current-term work,
+        since grades and "waiting on the teacher" can come weeks later.
+        """
         items: list[TodoItem] = []
         counts: dict[SubmissionStatus, int] = {}
         display_counts: dict[DisplayState, int] = {}
         overdue_count = 0
         done_not_submitted_overdue = 0
         late_items: list[dict[str, Any]] = []
-        attention_items: list[dict[str, Any]] = []
-        upcoming_items: list[dict[str, Any]] = []
+        lists: dict[Bucket, list[dict[str, Any]]] = {
+            bucket: [] for bucket in _LISTED_BUCKETS
+        }
         undated_count = 0
+        escalated_count = 0
         now = dt_util.utcnow()
-        upcoming_cutoff = now + timedelta(days=UPCOMING_WINDOW_DAYS)
+        upcoming_window = timedelta(days=UPCOMING_WINDOW_DAYS)
         online_grace, paper_grace = self.coordinator.grace_windows
+        threshold = self.coordinator.escalation_threshold
         workflow = self.coordinator.workflow
+        data = self.coordinator.data
         course_map = self._get_course_map()
-        assignments = self.coordinator.data.assignments_by_student.get(
-            self.student.id, []
-        )
+        on_list = {
+            str(a.id) for a in data.assignments_by_student.get(self.student.id, [])
+        }
         in_canvas: set[str] = set()
 
-        for assignment in assignments:
+        for assignment in data.term_assignments(self.student.id):
             uid = str(assignment.id)
             in_canvas.add(uid)
-            if not is_actionable_todo_assignment(assignment):
+            record = workflow.assignment(self.student.id, uid)
+            kind = assignment_kind(assignment, data, record)
+            if not is_tracked(assignment, kind):
                 continue
 
             course = course_map.get(assignment.course_id)
-            course_prefix = f"[{course.name}] " if course and course.name else ""
             canvas_status = submission_status(assignment, now)
             on_paper = not is_online_submission_assignment(assignment)
+            listed = uid in on_list
 
             # Undated, never-submitted items are mostly stale course-template
             # clutter; count them but keep them off the list.
             if canvas_status is SubmissionStatus.UPCOMING and assignment.due_at is None:
-                undated_count += 1
+                undated_count += listed
                 continue
 
-            record = workflow.assignment(self.student.id, uid)
             stage = record.stage if record else Stage.NOT_STARTED
-            note = record.note if record else ""
             claimed_at = record.claimed_submitted_at if record else None
             state = display_state(
                 canvas_status,
@@ -184,8 +306,70 @@ class CanvasTodoListEntity(
                 now,
                 online_grace,
                 paper_grace,
+                kind=kind,
             )
             overdue = is_overdue(canvas_status, assignment.due_at, now)
+            graded = assignment_graded(assignment, kind, now)
+            sub = assignment.submission
+            graded_at = sub.graded_at if sub else None
+            percent = (
+                grade_percent(sub.score, assignment.points_possible)
+                if graded and sub
+                else None
+            )
+            escalated = graded and is_escalated(percent, threshold)
+            bucket = work_bucket(
+                kind=kind,
+                state=state,
+                canvas_status=canvas_status,
+                graded=graded,
+                overdue=overdue,
+                due_at=assignment.due_at,
+                now=now,
+                upcoming_window=upcoming_window,
+                lead=self.coordinator.lead_time(kind),
+                in_review_window=in_review_window(
+                    graded_at, assignment.due_at, workflow.review_since
+                ),
+                student_reviewed=_reviewed_since(
+                    record.student_reviewed_at if record else None, graded_at
+                ),
+                parent_reviewed=_reviewed_since(
+                    record.parent_reviewed_at if record else None, graded_at
+                ),
+                closed=bool(record and record.closed_at),
+            )
+            compact = {
+                "uid": uid,
+                "course": course.name if course else None,
+                "class": (course.name.split(" - ")[0].strip() if course else ""),
+                "assignment": assignment.name.strip(),
+                "kind": kind.value,
+                "kind_override": bool(record and record.kind_override),
+                "category": data.group_name(assignment),
+                "status": canvas_status.value,
+                "paper": on_paper,
+                "due": assignment.due_at.isoformat() if assignment.due_at else None,
+                "url": assignment.html_url,
+                "stage": stage.value,
+                "note": record.note if record else "",
+                "display_state": state.value,
+                "overdue": overdue,
+                "claimed_submitted_at": _iso(claimed_at),
+                "bucket": bucket.value,
+                **_grade_fields(assignment, graded, percent, escalated),
+                **_review_fields(record),
+            }
+            if bucket is Bucket.CLOSED and _closed_long_ago(record, now):
+                pass
+            elif bucket in lists:
+                lists[bucket].append(compact)
+                escalated_count += escalated and bucket in (
+                    Bucket.REVIEW,
+                    Bucket.PARENT_REVIEW,
+                )
+            if not listed:
+                continue
 
             counts[canvas_status] = counts.get(canvas_status, 0) + 1
             display_counts[state] = display_counts.get(state, 0) + 1
@@ -193,61 +377,10 @@ class CanvasTodoListEntity(
             done_not_submitted_overdue += (
                 overdue and state is DisplayState.DONE_NOT_SUBMITTED
             )
-            compact = {
-                "uid": uid,
-                "course": course.name if course else None,
-                "class": (course.name.split(" - ")[0].strip() if course else ""),
-                "assignment": assignment.name.strip(),
-                "status": canvas_status.value,
-                "paper": on_paper,
-                "due": assignment.due_at.isoformat() if assignment.due_at else None,
-                "url": assignment.html_url,
-                "stage": stage.value,
-                "note": note,
-                "display_state": state.value,
-                "overdue": overdue,
-                "claimed_submitted_at": (
-                    claimed_at.isoformat() if claimed_at else None
-                ),
-            }
             if canvas_status is SubmissionStatus.LATE:
                 late_items.append(compact)
-            elif canvas_status in (SubmissionStatus.MISSING, SubmissionStatus.ZEROED):
-                attention_items.append(compact)
-            elif (
-                canvas_status is SubmissionStatus.UPCOMING
-                and assignment.due_at is not None
-                and assignment.due_at <= upcoming_cutoff
-            ):
-                upcoming_items.append(compact)
-
-            status_line = f"Status: {state.value}" + (" (paper)" if on_paper else "")
             items.append(
-                TodoItem(
-                    uid=uid,
-                    summary=(
-                        f"{summary_prefix(state, canvas_status)}{course_prefix}"
-                        f"{assignment.name}{' 📝' if on_paper else ''}"
-                    ),
-                    # Canvas is the only thing that completes an assignment; a
-                    # claimed submission never does.
-                    status=(
-                        TodoItemStatus.COMPLETED
-                        if is_done(canvas_status)
-                        else TodoItemStatus.NEEDS_ACTION
-                    ),
-                    due=assignment.due_at,
-                    description="\n".join(
-                        filter(
-                            None,
-                            [
-                                status_line,
-                                f"Note: {note}" if note else None,
-                                assignment.html_url,
-                            ],
-                        )
-                    ),
-                )
+                self._todo_item(assignment, course, kind, state, canvas_status, record)
             )
 
         followup_items, followup_counts = self._followups(now, in_canvas, items)
@@ -269,14 +402,60 @@ class CanvasTodoListEntity(
             "overdue_count": overdue_count,
             "done_not_submitted_overdue_count": done_not_submitted_overdue,
             "not_in_canvas_count": display_counts.get(DisplayState.NOT_IN_CANVAS, 0),
+            **{
+                f"{bucket.value}_count": len(listed) for bucket, listed in lists.items()
+            },
+            "escalated_count": escalated_count,
             **followup_counts,
             "late_items": late_items,
-            "attention_items": sorted(
-                attention_items, key=lambda i: i["due"] or "9999"
-            ),
-            "upcoming_items": sorted(upcoming_items, key=lambda i: i["due"] or "9999"),
+            **{
+                f"{bucket.value}_items": _sorted(bucket, listed)
+                for bucket, listed in lists.items()
+            },
             "followup_items": followup_items,
         }
+
+    def _todo_item(
+        self,
+        assignment: CanvasAssignment,
+        course: CanvasCourse | None,
+        kind: AssignmentKind,
+        state: DisplayState,
+        canvas_status: SubmissionStatus,
+        record: AssignmentRecord | None,
+    ) -> TodoItem:
+        """Build the to-do item for an assignment on the list."""
+        on_paper = not is_online_submission_assignment(assignment)
+        course_prefix = f"[{course.name}] " if course and course.name else ""
+        note = record.note if record else ""
+        status_line = f"Status: {state.value}" + (" (paper)" if on_paper else "")
+        if kind is not AssignmentKind.HOMEWORK:
+            status_line += f" · {kind.value}"
+        return TodoItem(
+            uid=str(assignment.id),
+            summary=(
+                f"{summary_prefix(state, canvas_status, kind)}{course_prefix}"
+                f"{assignment.name}{' 📝' if on_paper else ''}"
+            ),
+            # Canvas is the only thing that completes an assignment; a
+            # claimed submission never does.
+            status=(
+                TodoItemStatus.COMPLETED
+                if work_done(canvas_status, kind, on_paper)
+                else TodoItemStatus.NEEDS_ACTION
+            ),
+            due=assignment.due_at,
+            description="\n".join(
+                filter(
+                    None,
+                    [
+                        status_line,
+                        f"Note: {note}" if note else None,
+                        assignment.html_url,
+                    ],
+                )
+            ),
+        )
 
     def _followups(
         self, now: datetime, in_canvas: set[str], items: list[TodoItem]

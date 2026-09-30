@@ -116,6 +116,9 @@ Canvas doesn't show it) are visible instead of hidden.
 | `done_not_submitted` | Done – needs submitting |
 | `submitted_claimed`  | I submitted it          |
 
+Quizzes and tests have their own stages: `not_started`, `studying`, `ready`
+and `needs_makeup`, which opens a make-up follow-up.
+
 Marking **I submitted it** records the time. If Canvas still doesn't show the
 work after the grace period (12 hours for online work, 7 days for paper), the
 item shows **⚠️ NOT IN CANVAS** or **⚠️ PAPER NOT GRADED** and a follow-up
@@ -126,6 +129,49 @@ match wins: in Canvas (`confirmed`) → not in Canvas / submitted? / paper not
 graded / turned in (her claim, by grace period) → done, submit it → zero →
 missing → working / not started.
 
+### Homework, quizzes and tests
+
+Each assignment is sorted into a kind: homework (something to hand in), a
+quiz or a test (something to study for and take). Names win over Canvas
+groups: study guides, reviews, practice and corrections stay homework even
+when they mention a quiz or test; otherwise "test", "exam", "midterm", "final"
+and similar mean a test, "quiz" or a Canvas quiz means a quiz, and then the
+assignment group name (`Tests`, `Quizzes`) decides. A wrong guess can be fixed
+from the card (**More → Kind**) or with the `kind` field of
+`canvas.set_assignment_stage`; `auto` goes back to the automatic guess.
+
+A paper quiz or test past its date is shown **⏳ AWAITING GRADE**, not missing:
+it was almost always taken in class. A 0 on one counts as a real grade.
+
+### Lists
+
+All current-term work lands in exactly one list, first match wins:
+
+| List            | What's in it                                                         |
+| :-------------- | :------------------------------------------------------------------- |
+| `review`        | Graded since review tracking started; the student hasn't reviewed it |
+| `parent_review` | The student reviewed it; a parent hasn't                             |
+| `closed`        | Closed without a grade (until a grade arrives, which reopens it)     |
+| `attention`     | Missing, zero, not in Canvas, make-up needed, done-but-overdue       |
+| `waiting`       | Turned in or taken, waiting on the teacher — as long as it takes     |
+| `upcoming`      | Homework due in the next 14 days                                     |
+| `assessment`    | Quizzes and tests coming up within their lead time (3 and 7 days)    |
+
+Graded work reviewed by both the student and a parent, or graded before
+review tracking started (it starts 14 days before 0.3.0 was first loaded),
+drops off. Each review records who did it (the Home Assistant user). Grades
+below the escalation threshold (80%, a C or lower) are marked 🔺.
+
+Only a Home Assistant administrator can mark the parent review. A grade that
+changes after it was reviewed goes back to review.
+
+Waiting work that won't get a grade can be **closed without grade** with a
+reason (`feedback_received`, `not_graded`, `other`) and a note, and reopened. It stays on the closed list for 30 days. Closing
+doesn't hide work Canvas still shows missing or zeroed.
+
+Every grade is also kept in a grade log (score, percent, kind, Canvas group,
+graded time) for trends, for 400 days.
+
 ### Teacher follow-ups
 
 | Reason             | Opens when                                                | Closes when                        |
@@ -133,6 +179,7 @@ missing → working / not started.
 | `late_work`        | Canvas shows a late submission                            | Only when the student resolves it  |
 | `not_in_canvas`    | Online work marked submitted, grace passed, not in Canvas | Automatically when Canvas shows it |
 | `paper_not_graded` | Paper work marked turned in, grace passed, not graded     | Automatically when Canvas shows it |
+| `makeup`           | A quiz or test set to "needs make-up"                     | Automatically when it's graded     |
 
 Each follow-up appears as its own task on the to-do list (for example
 **✉️ EMAIL TEACHER · [Biology] Cell Lab Report**), due the next day. Ticking the
@@ -146,14 +193,17 @@ the task stays and is marked **No longer in Canvas**.
 
 **Settings → Devices & Services → Canvas → Configure**:
 
-| Option               | Default | Range |
-| :------------------- | :------ | :---- |
-| `online_grace_hours` | 12      | 1–72  |
-| `paper_grace_days`   | 7       | 1–21  |
+| Option                 | Default | Range  |
+| :--------------------- | :------ | :----- |
+| `online_grace_hours`   | 12      | 1–72   |
+| `paper_grace_days`     | 7       | 1–21   |
+| `quiz_lead_days`       | 3       | 1–14   |
+| `test_lead_days`       | 7       | 1–30   |
+| `escalation_threshold` | 80 (%)  | 50–100 |
 
 ### Services
 
-Both work for non-admin users. `config_entry_id` is optional when only one
+All work for non-admin users. `config_entry_id` is optional when only one
 Canvas account is set up.
 
 ```yaml
@@ -163,6 +213,24 @@ data:
   student_id: 6021 # optional; needed only if two students share the assignment
   stage: submitted_claimed # optional
   note: Uploaded the PDF # optional; "" clears it; max 500 characters
+  kind: quiz # optional; homework | quiz | test | auto
+```
+
+```yaml
+action: canvas.review_assignment
+data:
+  assignment_id: "5506356"
+  role: student # student (default) | parent
+  undo: false # true clears it; undoing the student's review clears the parent's
+```
+
+```yaml
+action: canvas.close_assignment
+data:
+  assignment_id: "5506356"
+  reason: feedback_received # feedback_received | not_graded | other
+  note: Went over it in class
+  undo: false # true reopens it
 ```
 
 ```yaml
@@ -181,10 +249,16 @@ On `todo.<student>_assignments`:
 - Counts: `<canvas status>_count`, `display_<state>_count`, `overdue_count`,
   `done_not_submitted_overdue_count`, `not_in_canvas_count`,
   `followup_open_count`, `followup_needs_contact_count`,
-  `followup_overdue_count`, `undated_count`.
+  `followup_overdue_count`, `undated_count`, `attention_count`,
+  `upcoming_count`, `assessment_count`, `waiting_count`, `review_count`,
+  `parent_review_count`, `closed_count`, `escalated_count` (flagged grades
+  still in review).
 - Lists (not recorded to history): `attention_items`, `upcoming_items`,
-  `late_items`, `followup_items`. Assignment items include `stage`, `note`,
-  `display_state`, `overdue` and `claimed_submitted_at`.
+  `assessment_items`, `waiting_items`, `review_items`, `parent_review_items`,
+  `closed_items`, `late_items`, `followup_items`. Assignment items include
+  `kind`, `stage`, `note`, `display_state`, `overdue`, `claimed_submitted_at`,
+  `score`, `percent`, `escalated`, `graded_at`, who reviewed it and when, and
+  close details.
 
 ### canvas-workflow-card
 
@@ -196,25 +270,32 @@ your dashboards are managed in YAML, the card is loaded on every page instead.
 ```yaml
 type: custom:canvas-workflow-card
 entity: todo.sydney_kohl_assignments
-show: [attention, upcoming, followups] # any of these, in this order
+# Any of: attention, upcoming, assessments, waiting, review, parent_review,
+# closed, followups (in the order given). Default: all but parent_review and
+# closed, which suit a parent-only view.
+show: [attention, upcoming, assessments, waiting, review, followups]
 title: Work list # optional
 config_entry_id: <id> # optional; only needed with several Canvas accounts
 ```
 
 Each row has the status, class, assignment (opens Canvas), due date (red when
 overdue), a stage dropdown and a note field (saved on Enter or when leaving
-the field). Follow-ups have stage, method and note. The card never marks a
+the field). Quizzes and tests offer study stages. Waiting items can be
+closed without a grade; graded items show the score (🔺 when flagged) with
+**Mark reviewed**, and in the parent review list **Parent reviewed** or
+**Send back**. Follow-ups have stage, method and note. The card never marks a
 Canvas assignment complete.
 
 ### Where the data is stored
 
-Stages, notes and follow-ups are saved in
+Stages, notes, follow-ups, reviews and the grade log are saved in
 `/config/.storage/canvas.workflow.<canvas user id>`. Home Assistant backups
 include it, and restoring a backup restores it. The file is keyed by the
 Canvas account, so removing and re-adding the integration finds the same data;
 removing the integration does **not** delete it. To start over, remove the
 integration, delete that file, and restart. **Download diagnostics** on the
-integration shows the stored data.
+integration shows the stored data. Going back to 0.2.x drops the reviews,
+closes and grade log the next time it saves.
 
 The to-do list itself is not stored: assignments are fetched from Canvas every
 hour. Personal reminders that aren't Canvas assignments belong in a separate

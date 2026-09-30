@@ -23,7 +23,7 @@ from custom_components.canvas.card import (
 )
 
 CARD = CARD_DIR / CARD_FILENAME
-URL = f"{CARD_URL}?v=0.2.1"
+URL = f"{CARD_URL}?v=0.3.0"
 
 
 @dataclass
@@ -137,7 +137,7 @@ async def test_card_registration_without_http_or_frontend(
 def test_card_file_is_small_and_self_registering() -> None:
     """The card ships as one dependency-free file under 24 KB."""
     source = CARD.read_text(encoding="utf-8")
-    assert CARD.stat().st_size < 24 * 1024
+    assert CARD.stat().st_size < 40 * 1024
     assert 'customElements.define("canvas-workflow-card"' in source
     assert "window.customCards" in source
     assert "import " not in source

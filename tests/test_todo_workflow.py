@@ -122,7 +122,12 @@ def _attrs(hass: HomeAssistant) -> dict[str, Any]:
 
 def _compact(hass: HomeAssistant, uid: str) -> dict[str, Any]:
     attrs = _attrs(hass)
-    listed = attrs["attention_items"] + attrs["upcoming_items"] + attrs["late_items"]
+    listed = [
+        item
+        for key, value in attrs.items()
+        if key.endswith("_items") and key != "followup_items"
+        for item in value
+    ]
     return next(i for i in listed if i["uid"] == uid)
 
 

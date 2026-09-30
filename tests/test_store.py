@@ -114,7 +114,7 @@ async def test_student_edit_saves_immediately_and_round_trips(
 
     saved = hass_storage[KEY]
     assert saved["version"] == 1
-    assert saved["minor_version"] == 1
+    assert saved["minor_version"] == 2
     record = saved["data"]["assignments"][f"{STUDENT}:{AID}"]
     assert record["stage"] == "submitted_claimed"
     assert record["note"] == "Uploaded from phone"
