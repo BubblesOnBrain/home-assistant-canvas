@@ -23,7 +23,7 @@ from custom_components.canvas.card import (
 )
 
 CARD = CARD_DIR / CARD_FILENAME
-URL = f"{CARD_URL}?v=0.3.0"
+URL = f"{CARD_URL}?v=0.3.1"
 
 
 @dataclass

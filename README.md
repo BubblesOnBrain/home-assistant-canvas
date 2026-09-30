@@ -275,8 +275,13 @@ entity: todo.sydney_kohl_assignments
 # closed, which suit a parent-only view.
 show: [attention, upcoming, assessments, waiting, review, followups]
 title: Work list # optional
+limit: 5 # rows per list before "Show all" (default 5; 0 shows everything)
 config_entry_id: <id> # optional; only needed with several Canvas accounts
 ```
+
+Each list can be its own card (`show: [review]`), so the lists can be placed
+separately on a dashboard, one per section or tab. Headings show how many
+items a list has, and long lists show the first few with **Show all**.
 
 Each row has the status, class, assignment (opens Canvas), due date (red when
 overdue), a stage dropdown and a note field (saved on Enter or when leaving
