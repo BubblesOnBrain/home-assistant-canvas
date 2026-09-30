@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from enum import StrEnum
 
 from .const import (
     ACTIVE_ENROLLMENT_STATES,
     COMPLETED_TERM_STATES,
     DEFAULT_STALE_DAYS_THRESHOLD,
+    DONE_RETENTION_DAYS,
     FILTER_NOT_GRADED,
     IN_CLASS_KEYWORDS,
     ONLINE_SUBMISSION_TYPES,
@@ -22,6 +24,73 @@ def _to_utc(dt: datetime | None) -> datetime | None:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+class SubmissionStatus(StrEnum):
+    """Truthful status of an assignment, derived from Canvas submission data.
+
+    Canvas grade columns are ambiguous: teachers often enter a placeholder 0
+    for work that was never turned in, which sets workflow_state=graded and
+    score=0. Only submitted_at (or an explicit excusal) proves work reached
+    Canvas, so "done" is decided from that, not from the presence of a grade.
+    """
+
+    UPCOMING = "upcoming"  # not due yet, nothing submitted
+    MISSING = "missing"  # past due / flagged missing, nothing submitted
+    ZEROED = "zeroed"  # graded 0 with no submission: placeholder or real 0
+    SUBMITTED = "submitted"  # turned in on time
+    LATE = "late"  # turned in after the due date
+    GRADED = "graded"  # graded with no online submission (e.g. paper work)
+    EXCUSED = "excused"
+
+
+OPEN_STATUSES = frozenset(
+    {SubmissionStatus.UPCOMING, SubmissionStatus.MISSING, SubmissionStatus.ZEROED}
+)
+
+
+def submission_status(
+    assignment: CanvasAssignment, now: datetime | None = None
+) -> SubmissionStatus:
+    """Classify an assignment's submission state.
+
+    Notes:
+    - Canvas only sets the `missing` flag for online submission types. Paper
+      work that is past due and ungraded is treated as missing here.
+    - A 0 with no submission is never "done"; it stays open as ZEROED so it
+      can be turned in or raised with the teacher.
+
+    """
+    current_time = _to_utc(now) or datetime.now(timezone.utc)
+    sub = assignment.submission
+
+    if sub is not None:
+        if sub.excused:
+            return SubmissionStatus.EXCUSED
+        if sub.submitted_at is not None:
+            if sub.late or sub.late_policy_status == "late":
+                return SubmissionStatus.LATE
+            return SubmissionStatus.SUBMITTED
+        if sub.missing or sub.late_policy_status == "missing":
+            return SubmissionStatus.MISSING
+        if sub.score == 0:
+            return SubmissionStatus.ZEROED
+        if (sub.score is not None and sub.score > 0) or sub.grade not in (
+            None,
+            "",
+            "0",
+        ):
+            return SubmissionStatus.GRADED
+
+    due_time = _to_utc(assignment.due_at)
+    if due_time is not None and due_time < current_time:
+        return SubmissionStatus.MISSING
+    return SubmissionStatus.UPCOMING
+
+
+def is_done(status: SubmissionStatus) -> bool:
+    """Return True if the status means the work is finished."""
+    return status not in OPEN_STATUSES
 
 
 def is_active_course(course: CanvasCourse, now: datetime | None = None) -> bool:
@@ -129,9 +198,17 @@ def is_active_todo_assignment(
             if due_time < stale_boundary:
                 return False
 
-    # 5. Graded or excused exclusion
-    if assignment.submission is not None and assignment.submission.is_graded_or_excused:
-        return False
+    # 5. Finished work: keep briefly so the list shows it completed, then drop.
+    #    Open work (upcoming, missing, zeroed) is always kept.
+    if is_done(submission_status(assignment, now=current_time)):
+        sub = assignment.submission
+        reference = _to_utc(assignment.due_at) or (
+            _to_utc(sub.submitted_at or sub.graded_at) if sub else None
+        )
+        if reference is None or reference < current_time - timedelta(
+            days=DONE_RETENTION_DAYS
+        ):
+            return False
 
     return True
 

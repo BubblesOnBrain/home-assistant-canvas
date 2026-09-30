@@ -239,12 +239,11 @@ async def test_coordinator_update_data_dual_students_success(
     assert 4899 in data.courses_by_student
     assert len(data.courses_by_student[4899]) == 1
 
-    # Verify cloned preterm & graded assignments were filtered out
+    # Verify cloned preterm assignment was filtered out; the recently graded
+    # quiz is retained (shown as completed) within DONE_RETENTION_DAYS
     assert 6021 in data.assignments_by_student
     quentin_assignments = data.assignments_by_student[6021]
-    assert len(quentin_assignments) == 1
-    assert quentin_assignments[0].id == 134664
-    assert quentin_assignments[0].name == "Chapter 1 Reflection"
+    assert {a.id for a in quentin_assignments} == {134664, 134666}
 
 
 async def test_coordinator_observee_fallback_single_student(

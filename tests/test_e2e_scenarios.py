@@ -660,19 +660,17 @@ async def test_scenario_1_dual_student_parent_observer_workflow(
     assert t_courses[2003].primary_grade.current_grade == "A+"
 
     # Verification 5: Actionable To-Do Assignment Filtering
-    # Quentin: 4 assignments active; graded assignment 1102 filtered out
+    # Quentin: 4 open assignments plus graded 1102, retained as completed
+    # because it was due within DONE_RETENTION_DAYS
     q_assignments = data.assignments_by_student[quentin_id]
-    assert len(q_assignments) == 4
     q_asg_ids = {a.id for a in q_assignments}
-    assert q_asg_ids == {1101, 1201, 1301, 1401}
-    assert 1102 not in q_asg_ids
+    assert q_asg_ids == {1101, 1102, 1201, 1301, 1401}
 
-    # Theodore: 3 assignments active; excused 2102 and not_graded 2302 filtered out
+    # Theodore: 3 open assignments plus recently excused 2102 (retained as
+    # completed); not_graded 2302 filtered out
     t_assignments = data.assignments_by_student[theodore_id]
-    assert len(t_assignments) == 3
     t_asg_ids = {a.id for a in t_assignments}
-    assert t_asg_ids == {2101, 2201, 2301}
-    assert 2102 not in t_asg_ids
+    assert t_asg_ids == {2101, 2102, 2201, 2301}
     assert 2302 not in t_asg_ids
 
     # Verification 6: Complete cross-student isolation

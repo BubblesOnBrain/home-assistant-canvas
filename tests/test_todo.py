@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -10,6 +12,7 @@ from homeassistant.components.todo import (
     TodoItemStatus,
 )
 from homeassistant.const import Platform
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
@@ -26,6 +29,7 @@ from custom_components.canvas.const import (
     ENDPOINT_USERS_SELF,
 )
 from custom_components.canvas.todo import (
+    STATUS_PREFIX,
     CanvasTodoListEntity,
     CanvasTodoListExtraStoredData,
 )
@@ -44,6 +48,14 @@ from .conftest import (
 )
 
 FROZEN_NOW = datetime(2026, 8, 24, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _base(summary: str | None) -> str:
+    """Strip Canvas status prefixes and the paper marker from a summary."""
+    text = summary or ""
+    for prefix in STATUS_PREFIX.values():
+        text = text.removeprefix(prefix)
+    return text.removesuffix(" 📝")
 
 
 def _setup_dual_student_routes(aioclient_mock: AiohttpClientMocker) -> None:
@@ -187,76 +199,58 @@ async def test_todo_items_projection_and_attributes(
     items = _extract_items(response, "todo.quentin_porter_assignments")
     assert len(items) == 1
     assert items[0]["uid"] == "134664"
-    assert items[0]["summary"] == "[AP US History] Chapter 1 Reflection"
+    assert _base(items[0]["summary"]) == "[AP US History] Chapter 1 Reflection"
     assert items[0]["status"] == "needs_action"
-    assert items[0]["description"] == "Read Chapter 1 and submit reflections."
+    assert "Read Chapter 1 and submit reflections." in items[0]["description"]
+    assert items[0]["description"].startswith("Status: ")
     assert "2026-09-01" in items[0]["due"]
 
 
-async def test_todo_local_completion_preserved_across_coordinator_updates(
+async def test_todo_canvas_item_completion_is_owned_by_canvas(
     hass: HomeAssistant,
     aioclient_mock: AiohttpClientMocker,
     mock_config_entry: MockConfigEntry,
 ) -> None:
-    """Test that checking off a task locally stays completed across coordinator refreshes."""
+    """Checking off a Canvas item is rejected; only a Canvas submission completes it."""
     _setup_dual_student_routes(aioclient_mock)
 
     await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    # Complete the item locally via service call
-    await hass.services.async_call(
-        "todo",
-        "update_item",
-        {
-            "entity_id": "todo.quentin_porter_assignments",
-            "item": "134664",
-            "status": "completed",
-        },
-        blocking=True,
-    )
-    await hass.async_block_till_done()
+    with pytest.raises(HomeAssistantError, match="complete automatically"):
+        await hass.services.async_call(
+            "todo",
+            "update_item",
+            {
+                "entity_id": "todo.quentin_porter_assignments",
+                "item": "134664",
+                "status": "completed",
+            },
+            blocking=True,
+        )
 
     state = hass.states.get("todo.quentin_porter_assignments")
     assert state is not None
-    assert state.state == "0"  # 0 pending tasks
+    assert state.state == "1"  # still open
 
-    # Trigger coordinator refresh
-    coordinator = mock_config_entry.runtime_data
-    await coordinator.async_refresh()
-    await hass.async_block_till_done()
-
-    # Verify state remains 0 (completed assignment does not resurrect)
-    state = hass.states.get("todo.quentin_porter_assignments")
-    assert state is not None
-    assert state.state == "0"
-
-    response = await hass.services.async_call(
-        "todo",
-        "get_items",
-        {"entity_id": ["todo.quentin_porter_assignments"], "status": ["completed"]},
-        blocking=True,
-        return_response=True,
+    # Manual items can still be checked off normally
+    entity = hass.data["entity_components"]["todo"].get_entity(
+        "todo.quentin_porter_assignments"
     )
-    completed_items = _extract_items(response, "todo.quentin_porter_assignments")
-    assert len(completed_items) == 1
-    assert completed_items[0]["uid"] == "134664"
-
-    # Re-open the item
-    await hass.services.async_call(
-        "todo",
-        "update_item",
-        {
-            "entity_id": "todo.quentin_porter_assignments",
-            "item": "134664",
-            "status": "needs_action",
-        },
-        blocking=True,
+    assert isinstance(entity, CanvasTodoListEntity)
+    await entity.async_create_todo_item(TodoItem(summary="Study for quiz"))
+    manual = [i for i in entity.todo_items or [] if i.summary == "Study for quiz"][0]
+    await entity.async_update_todo_item(
+        TodoItem(
+            uid=manual.uid, summary=manual.summary, status=TodoItemStatus.COMPLETED
+        )
     )
-    await hass.async_block_till_done()
-    state = hass.states.get("todo.quentin_porter_assignments")
-    assert state is not None
-    assert state.state == "1"
+    manual = [i for i in entity.todo_items or [] if i.uid == manual.uid][0]
+    assert manual.status == TodoItemStatus.COMPLETED
+
+    # Status counts are exposed for automations
+    assert "missing_count" in state.attributes or "upcoming_count" in state.attributes
+    assert "late_items" in state.attributes
 
 
 async def test_todo_manual_item_creation_update_and_deletion(
@@ -587,7 +581,8 @@ async def test_todo_state_restoration_on_startup(
 
     items = entity.todo_items or []
     canvas_item = [i for i in items if i.uid == "134664"][0]
-    assert canvas_item.status == TodoItemStatus.COMPLETED
+    # A restored local completion no longer overrides Canvas: still open
+    assert canvas_item.status == TodoItemStatus.NEEDS_ACTION
     assert canvas_item.summary == "[AP US History] Custom Restored Title"
 
     manual_item = [i for i in items if i.uid == "restored_manual_1"][0]
@@ -671,7 +666,7 @@ async def test_todo_items_ordered_by_due_date(
     )
 
     items = entity.todo_items or []
-    summaries = [i.summary for i in items]
+    summaries = [_base(i.summary) for i in items]
     assert summaries == [
         "[AP US History] Early Assignment",
         "Mid Assignment",
@@ -765,7 +760,7 @@ async def test_todo_filters_in_class_and_paper_assignments(
     assert isinstance(entity, CanvasTodoListEntity)
 
     items = entity.todo_items or []
-    summaries = [i.summary for i in items]
+    summaries = [_base(i.summary) for i in items]
     assert summaries == [
         "[AP US History] Paper Worksheet",
         "[AP US History] Online Homework Upload",

@@ -15,6 +15,7 @@ from homeassistant.components.todo import (
     TodoListEntityFeature,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
@@ -23,10 +24,22 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import CanvasConfigEntry
 from .const import CONF_BASE_URL, DOMAIN
 from .coordinator import CanvasDataUpdateCoordinator
-from .filtering import is_actionable_todo_assignment
+from .filtering import (
+    SubmissionStatus,
+    is_actionable_todo_assignment,
+    is_done,
+    is_online_submission_assignment,
+    submission_status,
+)
 from .models import CanvasCourse, CanvasObservee
 
 _LOGGER = logging.getLogger(__name__)
+
+STATUS_PREFIX: dict[SubmissionStatus, str] = {
+    SubmissionStatus.MISSING: "🔴 MISSING · ",
+    SubmissionStatus.ZEROED: "⭕ ZERO · ",
+    SubmissionStatus.LATE: "✉️ LATE · ",
+}
 
 
 async def async_setup_entry(
@@ -188,6 +201,8 @@ class CanvasTodoListEntity(
     def _update_todo_items(self) -> None:
         """Project coordinator assignments and local state into TodoItems."""
         items: list[TodoItem] = []
+        counts: dict[SubmissionStatus, int] = {}
+        late_items: list[dict[str, Any]] = []
         course_map = self._get_course_map()
         assignments = self.coordinator.data.assignments_by_student.get(
             self.student.id, []
@@ -203,11 +218,28 @@ class CanvasTodoListEntity(
 
             course = course_map.get(assignment.course_id)
             course_prefix = f"[{course.name}] " if course and course.name else ""
-            default_summary = f"{course_prefix}{assignment.name}"
+            canvas_status = submission_status(assignment)
+            on_paper = not is_online_submission_assignment(assignment)
+            counts[canvas_status] = counts.get(canvas_status, 0) + 1
+            if canvas_status is SubmissionStatus.LATE:
+                late_items.append(
+                    {
+                        "uid": uid,
+                        "course": course.name if course else None,
+                        "assignment": assignment.name,
+                        "url": assignment.html_url,
+                    }
+                )
+            default_summary = (
+                f"{STATUS_PREFIX.get(canvas_status, '')}{course_prefix}"
+                f"{assignment.name}{' 📝' if on_paper else ''}"
+            )
 
+            # Canvas is the source of truth: an item is complete only when
+            # Canvas shows it submitted, graded (paper work) or excused.
             status = (
                 TodoItemStatus.COMPLETED
-                if uid in self._completed_uids
+                if is_done(canvas_status)
                 else TodoItemStatus.NEEDS_ACTION
             )
 
@@ -215,8 +247,17 @@ class CanvasTodoListEntity(
             overrides = self._custom_item_overrides.get(uid, {})
             summary = overrides.get("summary", default_summary)
             due: datetime | date | None = overrides.get("due", assignment.due_at)
+            status_line = f"Status: {canvas_status.value}" + (
+                " (paper)" if on_paper else ""
+            )
             description = overrides.get(
-                "description", assignment.description or assignment.html_url
+                "description",
+                "\n".join(
+                    filter(
+                        None,
+                        [status_line, assignment.description or assignment.html_url],
+                    )
+                ),
             )
 
             items.append(
@@ -236,6 +277,13 @@ class CanvasTodoListEntity(
         items.sort(key=self._item_sort_key)
 
         self._attr_todo_items = items
+        self._attr_extra_state_attributes = {
+            **{
+                f"{status.value}_count": counts.get(status, 0)
+                for status in SubmissionStatus
+            },
+            "late_items": late_items,
+        }
 
     @staticmethod
     def _item_sort_key(item: TodoItem) -> tuple[int, datetime, str]:
@@ -277,11 +325,17 @@ class CanvasTodoListEntity(
         if uid in self._manual_items:
             self._manual_items[uid] = item
         else:
-            # Canvas synced item
-            if item.status == TodoItemStatus.COMPLETED:
-                self._completed_uids.add(uid)
-            elif item.status == TodoItemStatus.NEEDS_ACTION:
-                self._completed_uids.discard(uid)
+            # Canvas synced item: completion is owned by Canvas, not the list.
+            current = next((i for i in self._attr_todo_items if i.uid == uid), None)
+            if (
+                current is not None
+                and item.status is not None
+                and item.status != current.status
+            ):
+                raise HomeAssistantError(
+                    "Canvas assignments complete automatically once Canvas "
+                    "shows them submitted. Submit it in Canvas, then refresh."
+                )
 
             overrides = self._custom_item_overrides.setdefault(uid, {})
             if item.summary is not None:

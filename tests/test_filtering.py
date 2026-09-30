@@ -7,14 +7,18 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from custom_components.canvas.filtering import (
+    OPEN_STATUSES,
+    SubmissionStatus,
     _to_utc,
     filter_active_courses,
     filter_pending_assignments,
+    is_actionable_todo_assignment,
     is_active_course,
     is_active_todo_assignment,
-    is_actionable_todo_assignment,
+    is_done,
     is_in_class_activity,
     is_online_submission_assignment,
+    submission_status,
 )
 from custom_components.canvas.models import (
     CanvasAssignment,
@@ -467,14 +471,14 @@ def test_is_active_todo_assignment_submission_evaluation() -> None:
     )
     assert is_active_todo_assignment(asg_scored, course, now=FROZEN_NOW) is False
 
-    # Graded with zero score -> False
+    # Zero score with no submission stays open (placeholder zero) -> True
     asg_zero_scored = CanvasAssignment(
         id=2,
         course_id=1,
         name="HW 2",
         submission=CanvasSubmission(id=2, assignment_id=2, user_id=1, score=0.0),
     )
-    assert is_active_todo_assignment(asg_zero_scored, course, now=FROZEN_NOW) is False
+    assert is_active_todo_assignment(asg_zero_scored, course, now=FROZEN_NOW) is True
 
     # Graded with letter grade -> False
     asg_letter = CanvasAssignment(
@@ -494,7 +498,7 @@ def test_is_active_todo_assignment_submission_evaluation() -> None:
     )
     assert is_active_todo_assignment(asg_excused, course, now=FROZEN_NOW) is False
 
-    # Workflow state == "graded" -> False
+    # "graded" with no score, grade or submission proves nothing -> stays open
     asg_graded_state = CanvasAssignment(
         id=5,
         course_id=1,
@@ -503,7 +507,7 @@ def test_is_active_todo_assignment_submission_evaluation() -> None:
             id=5, assignment_id=5, user_id=1, workflow_state="graded"
         ),
     )
-    assert is_active_todo_assignment(asg_graded_state, course, now=FROZEN_NOW) is False
+    assert is_active_todo_assignment(asg_graded_state, course, now=FROZEN_NOW) is True
 
     # Unsubmitted / unassessed -> True
     asg_pending = CanvasAssignment(
@@ -606,3 +610,95 @@ def test_is_in_class_activity_and_actionable(
     )
     assert is_in_class_activity(asg) is expected_in_class
     assert is_actionable_todo_assignment(asg) is not expected_in_class
+
+
+# --- Truthful submission status (placeholder-zero handling) -------------------
+
+PAST_DUE = datetime(2026, 8, 20, 23, 59, tzinfo=timezone.utc)
+FUTURE_DUE = datetime(2026, 8, 30, 23, 59, tzinfo=timezone.utc)
+SUBMITTED = datetime(2026, 8, 20, 20, 0, tzinfo=timezone.utc)
+
+
+def _asg(
+    sub: CanvasSubmission | None, due: datetime | None = PAST_DUE
+) -> CanvasAssignment:
+    return CanvasAssignment(id=1, course_id=1, name="HW", due_at=due, submission=sub)
+
+
+def _sub(**kwargs: object) -> CanvasSubmission:
+    return CanvasSubmission(id=1, assignment_id=1, user_id=1, **kwargs)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("assignment", "expected"),
+    [
+        # Placeholder zero on never-submitted work: open, not done
+        (
+            _asg(_sub(workflow_state="graded", score=0.0, grade="0")),
+            SubmissionStatus.ZEROED,
+        ),
+        # Canvas missing flag / late policy wins over a placeholder grade
+        (
+            _asg(_sub(workflow_state="graded", score=0.0, missing=True)),
+            SubmissionStatus.MISSING,
+        ),
+        (_asg(_sub(score=0.0, late_policy_status="missing")), SubmissionStatus.MISSING),
+        # Paper work: Canvas never flags missing, so past due + nothing = missing
+        (_asg(_sub(workflow_state="unsubmitted")), SubmissionStatus.MISSING),
+        (_asg(None), SubmissionStatus.MISSING),
+        (_asg(None, due=FUTURE_DUE), SubmissionStatus.UPCOMING),
+        (_asg(None, due=None), SubmissionStatus.UPCOMING),
+        # Turned in
+        (
+            _asg(_sub(workflow_state="submitted", submitted_at=SUBMITTED)),
+            SubmissionStatus.SUBMITTED,
+        ),
+        (
+            _asg(_sub(workflow_state="submitted", submitted_at=SUBMITTED, late=True)),
+            SubmissionStatus.LATE,
+        ),
+        # A zero on work that WAS submitted is a real grade, still done
+        (
+            _asg(_sub(workflow_state="graded", submitted_at=SUBMITTED, score=0.0)),
+            SubmissionStatus.SUBMITTED,
+        ),
+        # Paper work graded with no online submission
+        (
+            _asg(_sub(workflow_state="graded", score=18.0, grade="18")),
+            SubmissionStatus.GRADED,
+        ),
+        (_asg(_sub(excused=True, score=0.0)), SubmissionStatus.EXCUSED),
+    ],
+)
+def test_submission_status(
+    assignment: CanvasAssignment, expected: SubmissionStatus
+) -> None:
+    """Classify submissions truthfully regardless of gradebook placeholders."""
+    assert submission_status(assignment, now=FROZEN_NOW) is expected
+    assert is_done(expected) is (expected not in OPEN_STATUSES)
+
+
+def test_done_items_retained_then_dropped() -> None:
+    """Finished work stays for DONE_RETENTION_DAYS after due, open work always stays."""
+    course = CanvasCourse(id=1, name="Math")
+    done_recent = _asg(_sub(workflow_state="submitted", submitted_at=SUBMITTED))
+    done_old = CanvasAssignment(
+        id=2,
+        course_id=1,
+        name="Old",
+        due_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        submission=_sub(
+            workflow_state="submitted",
+            submitted_at=datetime(2026, 7, 31, tzinfo=timezone.utc),
+        ),
+    )
+    zero_old = CanvasAssignment(
+        id=3,
+        course_id=1,
+        name="Old zero",
+        due_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        submission=_sub(workflow_state="graded", score=0.0),
+    )
+    assert is_active_todo_assignment(done_recent, course, now=FROZEN_NOW) is True
+    assert is_active_todo_assignment(done_old, course, now=FROZEN_NOW) is False
+    assert is_active_todo_assignment(zero_old, course, now=FROZEN_NOW) is True

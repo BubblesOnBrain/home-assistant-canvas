@@ -276,6 +276,7 @@ class CanvasSubmission:
     submitted_at: datetime | None = None
     graded_at: datetime | None = None
     submission_type: str | None = None
+    late_policy_status: str | None = None
 
     @property
     def is_graded_or_excused(self) -> bool:
@@ -313,6 +314,7 @@ class CanvasSubmission:
             submitted_at=_parse_dt(data.get("submitted_at")),
             graded_at=_parse_dt(data.get("graded_at")),
             submission_type=data.get("submission_type"),
+            late_policy_status=data.get("late_policy_status"),
         )
 
 
