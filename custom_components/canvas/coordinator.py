@@ -17,6 +17,7 @@ from .exceptions import (
     CanvasAuthError,
     CanvasConnectionError,
     CanvasError,
+    CanvasForbiddenError,
 )
 from .filtering import filter_active_courses, filter_pending_assignments
 from .models import (
@@ -76,11 +77,29 @@ class CanvasDataUpdateCoordinator(DataUpdateCoordinator[CanvasData]):
             ) -> tuple[int, list[CanvasCourse], list[CanvasAssignment]]:
                 raw_courses = await self.client.async_get_student_courses(student.id)
                 active_courses = filter_active_courses(raw_courses)
+
+                async def _fetch_course_assignments(
+                    course: CanvasCourse,
+                ) -> list[CanvasAssignment]:
+                    # A 403 (not 401) means the token is valid but this observer
+                    # lacks access to one course (e.g. a club or homepage course).
+                    # Skip that course instead of failing the whole entry.
+                    try:
+                        return await self.client.async_get_student_assignments(
+                            course.id, student.id
+                        )
+                    except CanvasForbiddenError as err:
+                        _LOGGER.warning(
+                            "Skipping course %s (%s) for student %s: %s",
+                            course.id,
+                            course.name,
+                            student.id,
+                            err,
+                        )
+                        return []
+
                 course_results = await asyncio.gather(
-                    *(
-                        self.client.async_get_student_assignments(course.id, student.id)
-                        for course in active_courses
-                    )
+                    *(_fetch_course_assignments(course) for course in active_courses)
                 )
                 student_assignments: list[CanvasAssignment] = []
                 for course, raw_asgs in zip(

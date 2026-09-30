@@ -31,6 +31,7 @@ from .const import (
 )
 from .exceptions import (
     CanvasAuthError,
+    CanvasForbiddenError,
     CanvasConnectionError,
     CanvasError,
     CanvasRateLimitError,
@@ -168,7 +169,12 @@ class CanvasApiClient:
                         )
                     ):
                         raise CanvasRateLimitError("Canvas API rate limit exceeded.")
-                    raise CanvasAuthError(
+                    error_cls = (
+                        CanvasForbiddenError
+                        if response.status == 403
+                        else CanvasAuthError
+                    )
+                    raise error_cls(
                         f"Authentication failed (HTTP {response.status}): {body_text}"
                     )
 

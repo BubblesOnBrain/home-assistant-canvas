@@ -529,3 +529,74 @@ async def test_coordinator_submissions_fetch_partial_failure(
 
     with pytest.raises(UpdateFailed):
         await coordinator._async_update_data()
+
+
+async def test_coordinator_skips_course_forbidden_to_observer(
+    hass: HomeAssistant,
+    aioclient_mock: AiohttpClientMocker,
+    mock_config_entry: MockConfigEntry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A 403 on one course (e.g. a club hub) is skipped, not an auth failure."""
+    active_term = build_mock_term_dict(
+        term_id=413,
+        name="Fall 2026",
+        start_at="2026-08-15T00:00:00Z",
+        end_at="2026-12-20T23:59:59Z",
+        workflow_state="active",
+    )
+    course_ok = build_mock_course_dict(
+        course_id=7349, name="AP US History", term=active_term
+    )
+    course_club = build_mock_course_dict(
+        course_id=7351, name="SOA Club Hub", term=active_term
+    )
+    asg = build_mock_assignment_dict(
+        assignment_id=134664,
+        course_id=7349,
+        name="Chapter 1 Reflection",
+        due_at="2026-09-01T23:59:59Z",
+    )
+    sub = build_mock_submission_dict(
+        submission_id=1,
+        assignment_id=134664,
+        user_id=6021,
+        workflow_state="unsubmitted",
+        assignment=asg,
+    )
+
+    aioclient_mock.get(
+        f"{TEST_BASE_URL}{ENDPOINT_USERS_SELF}", json=MOCK_USER_SELF_RESPONSE
+    )
+    aioclient_mock.get(
+        f"{TEST_BASE_URL}{ENDPOINT_USERS_OBSERVEES}", json=[MOCK_OBSERVEES_RESPONSE[0]]
+    )
+    aioclient_mock.get(
+        f"{TEST_BASE_URL}{ENDPOINT_USER_COURSES.format(user_id=6021)}",
+        json=[course_ok, course_club],
+    )
+    aioclient_mock.get(
+        f"{TEST_BASE_URL}{ENDPOINT_COURSE_STUDENT_SUBMISSIONS.format(course_id=7349)}",
+        json=[sub],
+    )
+    aioclient_mock.get(
+        f"{TEST_BASE_URL}{ENDPOINT_COURSE_STUDENT_SUBMISSIONS.format(course_id=7351)}",
+        status=403,
+        text='{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}',
+    )
+
+    coordinator = _create_coordinator(hass, mock_config_entry)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "custom_components.canvas.filtering.datetime",
+            type(
+                "MockDateTime",
+                (datetime,),
+                {"now": classmethod(lambda cls, tz=None: FROZEN_NOW)},
+            ),
+        )
+        data = await coordinator._async_update_data()
+
+    assert {c.id for c in data.courses_by_student[6021]} == {7349, 7351}
+    assert [a.id for a in data.assignments_by_student[6021]] == [134664]
+    assert "Skipping course 7351 (SOA Club Hub)" in caplog.text

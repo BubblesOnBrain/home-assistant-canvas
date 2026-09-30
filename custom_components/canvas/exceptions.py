@@ -23,3 +23,7 @@ class CanvasRateLimitError(CanvasConnectionError):
 
 class CanvasResponseError(CanvasError):
     """Exception raised when Canvas LMS returns an unexpected or invalid response."""
+
+
+class CanvasForbiddenError(CanvasAuthError):
+    """Valid token, but not permitted to access this resource (HTTP 403)."""
