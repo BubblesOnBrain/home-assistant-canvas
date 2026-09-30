@@ -353,7 +353,9 @@ class CanvasTodoListEntity(
             self._manual_items[uid] = item
         else:
             # Canvas synced item: completion is owned by Canvas, not the list.
-            current = next((i for i in self._attr_todo_items if i.uid == uid), None)
+            current = next(
+                (i for i in self._attr_todo_items or [] if i.uid == uid), None
+            )
             if (
                 current is not None
                 and item.status is not None
