@@ -9,6 +9,7 @@
 
 const DOMAIN = "canvas";
 const NOTE_MAX = 500;
+const SAVED_MS = 1500;
 const SECTIONS = ["attention", "upcoming", "followups"];
 
 const STAGES = [
@@ -122,6 +123,7 @@ class CanvasWorkflowCard extends HTMLElement {
     this._stateObj = undefined;
     this._pendingRender = false;
     this._errors = {};
+    this._saved = {};
     this._translationsRequested = false;
   }
 
@@ -184,9 +186,10 @@ class CanvasWorkflowCard extends HTMLElement {
 
   _render() {
     if (!this._config || !this._hass) return;
-    // Don't rebuild under the student's fingers; finish when she leaves the field.
+    // Don't rebuild under the student's fingers (typing a note or with a
+    // dropdown open); finish when she leaves the field.
     const active = this.shadowRoot.activeElement;
-    if (active && active.tagName === "INPUT") {
+    if (active && (active.tagName === "INPUT" || active.tagName === "SELECT")) {
       this._pendingRender = true;
       return;
     }
@@ -279,7 +282,12 @@ class CanvasWorkflowCard extends HTMLElement {
   _select(id, kind, options, value, onChange, placeholder) {
     const select = h(
       "select",
-      { id, "aria-label": placeholder || kind, onchange: onChange },
+      {
+        id,
+        "aria-label": placeholder || kind,
+        onchange: onChange,
+        onblur: () => this._flushRender(),
+      },
       [
         placeholder ? h("option", { value: "", text: placeholder }) : null,
         ...options.map((o) =>
@@ -291,8 +299,19 @@ class CanvasWorkflowCard extends HTMLElement {
     return select;
   }
 
+  _flushRender() {
+    if (this._pendingRender) this._render();
+  }
+
   _note(id, value, save) {
-    const saved = h("span", { class: "saved", "aria-hidden": "true" });
+    // Kept per field, not on the element: saving usually re-renders the row
+    // before the service call returns.
+    const recent = Date.now() - (this._saved[id] || 0) < SAVED_MS;
+    const saved = h("span", {
+      class: "saved",
+      "aria-hidden": "true",
+      text: recent ? "✓" : "",
+    });
     const input = h("input", {
       id,
       type: "text",
@@ -304,13 +323,16 @@ class CanvasWorkflowCard extends HTMLElement {
       },
       onblur: async () => {
         const next = input.value.trim().slice(0, NOTE_MAX);
-        if (next !== (value || "")) {
-          if (await save(next)) {
-            saved.textContent = "✓";
-            setTimeout(() => (saved.textContent = ""), 1500);
-          }
+        if (next !== (value || "") && (await save(next))) {
+          this._saved[id] = Date.now();
+          saved.textContent = "✓";
+          this._pendingRender = true; // show the tick on the rebuilt row
+          setTimeout(() => {
+            this._pendingRender = true;
+            this._flushRender();
+          }, SAVED_MS + 50);
         }
-        if (this._pendingRender) this._render();
+        this._flushRender();
       },
     });
     input.value = value || "";
@@ -335,10 +357,16 @@ class CanvasWorkflowCard extends HTMLElement {
 
   _assignmentRow(item) {
     const key = `a-${item.uid}`;
+    // Assignment ids are shared by siblings in one class; say whose it is.
+    const studentId = this._stateObj.attributes.student_id;
     const set = (data) =>
       this._call(
         "set_assignment_stage",
-        { assignment_id: item.uid, ...data },
+        {
+          assignment_id: item.uid,
+          ...(studentId !== undefined ? { student_id: studentId } : {}),
+          ...data,
+        },
         key,
       );
     const state = item.display_state || "not_started";
@@ -411,7 +439,8 @@ class CanvasWorkflowCard extends HTMLElement {
           "followup_method",
           FOLLOWUP_METHODS,
           f.method,
-          (ev) => ev.target.value && set({ method: ev.target.value }),
+          // Picking "How?" sends "" and clears the method.
+          (ev) => set({ method: ev.target.value }),
           "How?",
         ),
         this._note(`${key}-note`, f.note, (note) => set({ note })),
