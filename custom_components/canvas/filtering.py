@@ -199,12 +199,17 @@ def is_active_todo_assignment(
                 return False
 
     # 5. Finished work: keep briefly so the list shows it completed, then drop.
-    #    Open work (upcoming, missing, zeroed) is always kept.
+    #    Open work (upcoming, missing, zeroed) is always kept. The window runs
+    #    from whichever came last (due, submitted, graded), so work turned in
+    #    or graded weeks late is still seen, e.g. to open a late-work follow-up.
     if is_done(submission_status(assignment, now=current_time)):
         sub = assignment.submission
-        reference = _to_utc(assignment.due_at) or (
-            _to_utc(sub.submitted_at or sub.graded_at) if sub else None
-        )
+        moments = [
+            _to_utc(assignment.due_at),
+            _to_utc(sub.submitted_at) if sub else None,
+            _to_utc(sub.graded_at) if sub else None,
+        ]
+        reference = max((m for m in moments if m is not None), default=None)
         if reference is None or reference < current_time - timedelta(
             days=DONE_RETENTION_DAYS
         ):

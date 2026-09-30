@@ -18,9 +18,24 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.selector import (
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
+)
 
 from .api import CanvasApiClient
-from .const import CONF_ACCESS_TOKEN, CONF_BASE_URL, DOMAIN
+from .const import (
+    CONF_ACCESS_TOKEN,
+    CONF_BASE_URL,
+    CONF_ONLINE_GRACE_HOURS,
+    CONF_PAPER_GRACE_DAYS,
+    DEFAULT_ONLINE_GRACE_HOURS,
+    DEFAULT_PAPER_GRACE_DAYS,
+    DOMAIN,
+    ONLINE_GRACE_HOURS_RANGE,
+    PAPER_GRACE_DAYS_RANGE,
+)
 from .exceptions import (
     CanvasAuthError,
     CanvasConnectionError,
@@ -213,7 +228,41 @@ class CanvasOptionsFlowHandler(OptionsFlow):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
+        options = self.config_entry.options
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema({}),
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_ONLINE_GRACE_HOURS,
+                        default=options.get(
+                            CONF_ONLINE_GRACE_HOURS, DEFAULT_ONLINE_GRACE_HOURS
+                        ),
+                    ): _whole_number(ONLINE_GRACE_HOURS_RANGE, "h"),
+                    vol.Required(
+                        CONF_PAPER_GRACE_DAYS,
+                        default=options.get(
+                            CONF_PAPER_GRACE_DAYS, DEFAULT_PAPER_GRACE_DAYS
+                        ),
+                    ): _whole_number(PAPER_GRACE_DAYS_RANGE, "d"),
+                }
+            ),
         )
+
+
+def _whole_number(bounds: tuple[int, int], unit: str) -> vol.All:
+    """Return a validator for a whole number within bounds."""
+    low, high = bounds
+    return vol.All(
+        NumberSelector(
+            NumberSelectorConfig(
+                min=low,
+                max=high,
+                step=1,
+                unit_of_measurement=unit,
+                mode=NumberSelectorMode.BOX,
+            )
+        ),
+        vol.Coerce(int),
+        vol.Range(min=low, max=high),
+    )

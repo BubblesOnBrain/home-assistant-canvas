@@ -677,7 +677,7 @@ async def test_options_flow_handler(
         user_input={},
     )
     assert result2["type"] is FlowResultType.CREATE_ENTRY
-    assert result2["data"] == {}
+    assert result2["data"] == {"online_grace_hours": 12, "paper_grace_days": 7}
 
 
 def test_get_entry_title_fallback_when_host_empty() -> None:

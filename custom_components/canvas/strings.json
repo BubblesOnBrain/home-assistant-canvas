@@ -52,7 +52,15 @@
     "step": {
       "init": {
         "title": "Canvas LMS Options",
-        "description": "Configure Canvas LMS integration options."
+        "description": "How long to wait for Canvas to show work the student marked \"I submitted it\" before flagging it and opening a follow-up.",
+        "data": {
+          "online_grace_hours": "Online work grace period (hours)",
+          "paper_grace_days": "Paper work grace period (days)"
+        },
+        "data_description": {
+          "online_grace_hours": "Online submissions usually appear in Canvas within minutes. Default 12 hours.",
+          "paper_grace_days": "Paper work only appears once the teacher enters a grade. Default 7 days."
+        }
       }
     }
   },
@@ -66,6 +74,122 @@
       "assignments": {
         "name": "Assignments"
       }
+    }
+  },
+  "selector": {
+    "stage": {
+      "options": {
+        "not_started": "Not started",
+        "working": "Working on it",
+        "done_not_submitted": "Done – needs submitting",
+        "submitted_claimed": "I submitted it"
+      }
+    },
+    "followup_stage": {
+      "options": {
+        "needs_contact": "Needs contact",
+        "contacted": "Contacted",
+        "resolved": "Resolved"
+      }
+    },
+    "followup_method": {
+      "options": {
+        "email": "Email",
+        "late_form": "Late-work form",
+        "in_person": "In person"
+      }
+    },
+    "followup_reason": {
+      "options": {
+        "late_work": "Late work",
+        "not_in_canvas": "Not in Canvas",
+        "paper_not_graded": "Paper not graded"
+      }
+    },
+    "display_state": {
+      "options": {
+        "confirmed": "In Canvas",
+        "not_in_canvas": "Not in Canvas",
+        "claimed_pending": "Submitted?",
+        "paper_not_graded": "Paper not graded",
+        "paper_waiting": "Turned in",
+        "done_not_submitted": "Done, submit it",
+        "zeroed": "Zero",
+        "missing": "Missing",
+        "working": "Working on it",
+        "not_started": "Not started"
+      }
+    }
+  },
+  "services": {
+    "set_assignment_stage": {
+      "name": "Set assignment stage",
+      "description": "Set the student's own stage and/or note on a Canvas assignment. This never marks the assignment complete; only Canvas can.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Canvas account",
+          "description": "The Canvas integration entry. Optional when only one Canvas account is set up."
+        },
+        "assignment_id": {
+          "name": "Assignment ID",
+          "description": "The Canvas assignment ID (the to-do item's uid)."
+        },
+        "student_id": {
+          "name": "Student ID",
+          "description": "The Canvas student (observee) id. Only needed when two students share the assignment; the card sends it automatically."
+        },
+        "stage": {
+          "name": "Stage",
+          "description": "Where the student says the work is."
+        },
+        "note": {
+          "name": "Note",
+          "description": "Plain text, up to 500 characters. Leave out to keep the current note; send an empty value to clear it."
+        }
+      }
+    },
+    "set_followup_stage": {
+      "name": "Set follow-up stage",
+      "description": "Update a teacher follow-up: its stage, how the teacher was contacted, and a note.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Canvas account",
+          "description": "The Canvas integration entry. Optional when only one Canvas account is set up."
+        },
+        "followup_id": {
+          "name": "Follow-up ID",
+          "description": "The follow-up id: student ID, assignment ID and reason, e.g. 6021:5506356:late_work."
+        },
+        "stage": {
+          "name": "Stage",
+          "description": "Progress on the follow-up. Resolved records the time; any other stage clears it."
+        },
+        "method": {
+          "name": "Method",
+          "description": "How the teacher was contacted. Send an empty value to clear it."
+        },
+        "note": {
+          "name": "Note",
+          "description": "Plain text, up to 500 characters. Leave out to keep the current note; send an empty value to clear it."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "unknown_assignment": {
+      "message": "Assignment {assignment_id} isn't in the current Canvas data and has no saved record."
+    },
+    "unknown_followup": {
+      "message": "Follow-up {followup_id} doesn't exist."
+    },
+    "note_too_long": {
+      "message": "Notes can be at most {max} characters."
+    },
+    "nothing_to_set": {
+      "message": "Nothing to change: give at least one of {fields}."
+    },
+    "ambiguous_assignment": {
+      "message": "Assignment {assignment_id} belongs to more than one student; give student_id."
     }
   }
 }
