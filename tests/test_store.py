@@ -242,8 +242,9 @@ async def test_claim_flow_opens_and_auto_resolves_followups(
     followup = store.followups["5506356:not_in_canvas"]
     assert followup.stage is FollowupStage.NEEDS_CONTACT
     assert followup.contact_by == date(2026, 9, 30)
-    assert store.assignments[AID].snapshot is not None
-    assert store.assignments[AID].snapshot.canvas_status == "missing"
+    snapshot = store.assignments[AID].snapshot
+    assert snapshot is not None
+    assert snapshot.canvas_status == "missing"
 
     # Idempotent: nothing new on the next pass.
     assert not _reconcile(store, _data(_assignment()), after + timedelta(minutes=15))
@@ -259,7 +260,9 @@ async def test_claim_flow_opens_and_auto_resolves_followups(
     assert late.stage is FollowupStage.NEEDS_CONTACT
     # Her stage is left as she set it: facts and claims are never merged.
     assert store.assignments[AID].stage is Stage.SUBMITTED_CLAIMED
-    assert store.assignments[AID].snapshot.canvas_status == "late"
+    snapshot = store.assignments[AID].snapshot
+    assert snapshot is not None
+    assert snapshot.canvas_status == "late"
 
 
 async def test_paper_claim_uses_paper_grace(hass: HomeAssistant) -> None:

@@ -16,6 +16,7 @@ from homeassistant.helpers.typing import ConfigType
 from .api import CanvasApiClient
 from .const import CONF_ACCESS_TOKEN, CONF_BASE_URL, DOMAIN, WORKFLOW_TICK_MINUTES
 from .coordinator import CanvasDataUpdateCoordinator
+from .card import async_register_card
 from .services import async_setup_services
 from .store import CanvasWorkflowStore
 
@@ -31,6 +32,7 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the Canvas integration (services shared by all entries)."""
     async_setup_services(hass)
+    await async_register_card(hass)
     return True
 
 
