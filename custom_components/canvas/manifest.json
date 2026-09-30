@@ -1,12 +1,12 @@
 {
   "domain": "canvas",
   "name": "Canvas",
-  "after_dependencies": ["frontend", "http"],
+  "after_dependencies": ["frontend", "http", "lovelace"],
   "codeowners": ["@allenporter"],
   "config_flow": true,
   "documentation": "https://github.com/BubblesOnBrain/home-assistant-canvas",
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/BubblesOnBrain/home-assistant-canvas/issues",
-  "version": "0.2.0"
+  "version": "0.2.1"
 }

@@ -188,8 +188,10 @@ On `todo.<student>_assignments`:
 
 ### canvas-workflow-card
 
-The integration serves and loads this card itself; there is no separate
-resource to add. After updating, reload the browser once.
+The integration serves this card and adds it to your dashboard resources
+itself (Settings → Dashboards → ⋮ → Resources), keeping its version up to date.
+There is nothing to add by hand. After updating, reload the browser once. If
+your dashboards are managed in YAML, the card is loaded on every page instead.
 
 ```yaml
 type: custom:canvas-workflow-card
