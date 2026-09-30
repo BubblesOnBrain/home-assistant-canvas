@@ -25,6 +25,28 @@ DONE_RETENTION_DAYS: Final = 7
 # Days ahead included in the upcoming_items attribute
 UPCOMING_WINDOW_DAYS: Final = 14
 
+# Student workflow (stages, notes, follow-ups)
+CONF_ONLINE_GRACE_HOURS: Final = "online_grace_hours"
+CONF_PAPER_GRACE_DAYS: Final = "paper_grace_days"
+DEFAULT_ONLINE_GRACE_HOURS: Final = 12
+DEFAULT_PAPER_GRACE_DAYS: Final = 7
+ONLINE_GRACE_HOURS_RANGE: Final = (1, 72)
+PAPER_GRACE_DAYS_RANGE: Final = (1, 21)
+
+STORAGE_VERSION: Final = 1
+STORAGE_MINOR_VERSION: Final = 1
+STORAGE_KEY_PREFIX: Final = f"{DOMAIN}.workflow"
+# Debounce for saves made by the reconcile step (user edits save immediately)
+STORAGE_SAVE_DELAY: Final = 2
+NOTE_MAX_LENGTH: Final = 500
+# Records unseen in Canvas this long, with every follow-up resolved, are pruned
+RECORD_PRUNE_DAYS: Final = 60
+# Resolved (and contacted) follow-ups stay visible this long
+FOLLOWUP_VISIBLE_DAYS: Final = 7
+# How often time-based states (grace windows) are re-evaluated between fetches
+WORKFLOW_TICK_MINUTES: Final = 15
+FOLLOWUP_UID_PREFIX: Final = "followup:"
+
 # HTTP Headers
 HEADER_ACCEPT: Final = "Accept"
 HEADER_AUTHORIZATION: Final = "Authorization"
