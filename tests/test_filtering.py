@@ -702,3 +702,29 @@ def test_done_items_retained_then_dropped() -> None:
     assert is_active_todo_assignment(done_recent, course, now=FROZEN_NOW) is True
     assert is_active_todo_assignment(done_old, course, now=FROZEN_NOW) is False
     assert is_active_todo_assignment(zero_old, course, now=FROZEN_NOW) is True
+
+    # Due long ago but turned in (or graded) recently: kept for the window.
+    late_recent = CanvasAssignment(
+        id=4,
+        course_id=1,
+        name="Turned in weeks late",
+        due_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        submission=_sub(
+            workflow_state="submitted",
+            submitted_at=FROZEN_NOW - timedelta(days=1),
+            late=True,
+        ),
+    )
+    graded_recent = CanvasAssignment(
+        id=5,
+        course_id=1,
+        name="Paper graded weeks late",
+        due_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        submission=_sub(
+            workflow_state="graded",
+            score=8.0,
+            graded_at=FROZEN_NOW - timedelta(days=2),
+        ),
+    )
+    assert is_active_todo_assignment(late_recent, course, now=FROZEN_NOW) is True
+    assert is_active_todo_assignment(graded_recent, course, now=FROZEN_NOW) is True
