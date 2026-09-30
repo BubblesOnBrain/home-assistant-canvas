@@ -162,8 +162,12 @@ review tracking started (it starts 14 days before 0.3.0 was first loaded),
 drops off. Each review records who did it (the Home Assistant user). Grades
 below the escalation threshold (80%, a C or lower) are marked 🔺.
 
+Only a Home Assistant administrator can mark the parent review. A grade that
+changes after it was reviewed goes back to review.
+
 Waiting work that won't get a grade can be **closed without grade** with a
-reason (`feedback_received`, `not_graded`, `other`) and a note, and reopened.
+reason (`feedback_received`, `not_graded`, `other`) and a note, and reopened. It stays on the closed list for 30 days. Closing
+doesn't hide work Canvas still shows missing or zeroed.
 
 Every grade is also kept in a grade log (score, percent, kind, Canvas group,
 graded time) for trends, for 400 days.
@@ -290,7 +294,8 @@ include it, and restoring a backup restores it. The file is keyed by the
 Canvas account, so removing and re-adding the integration finds the same data;
 removing the integration does **not** delete it. To start over, remove the
 integration, delete that file, and restart. **Download diagnostics** on the
-integration shows the stored data.
+integration shows the stored data. Going back to 0.2.x drops the reviews,
+closes and grade log the next time it saves.
 
 The to-do list itself is not stored: assignments are fetched from Canvas every
 hour. Personal reminders that aren't Canvas assignments belong in a separate

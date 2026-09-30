@@ -43,6 +43,8 @@ NOTE_MAX_LENGTH: Final = 500
 RECORD_PRUNE_DAYS: Final = 60
 # Resolved (and contacted) follow-ups stay visible this long
 FOLLOWUP_VISIBLE_DAYS: Final = 7
+# Work closed without a grade stays on the closed list this long.
+CLOSED_VISIBLE_DAYS: Final = 30
 # How often time-based states (grace windows) are re-evaluated between fetches
 WORKFLOW_TICK_MINUTES: Final = 15
 FOLLOWUP_UID_PREFIX: Final = "followup:"

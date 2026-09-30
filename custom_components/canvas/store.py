@@ -407,7 +407,9 @@ def assignment_graded(
 ) -> bool:
     """Return True if the teacher has entered a real grade for the assignment."""
     sub = assignment.submission
-    if sub is None:
+    # Canvas fills in the auto-graded part of a quiz before the teacher has
+    # graded its written answers; that partial score isn't the grade.
+    if sub is None or sub.workflow_state == "pending_review":
         return False
     return is_graded(
         sub.score,
@@ -821,6 +823,7 @@ class CanvasWorkflowStore:
                         state,
                         {r: f.stage for r, f in existing.items()},
                         graded=graded,
+                        closed=bool(record and record.closed_at),
                     )
                     if action is not FollowupAction.OPEN or aid in on_list
                 ]

@@ -231,7 +231,7 @@
         },
         "role": {
           "name": "Role",
-          "description": "Who is reviewing: the student first, then a parent. Default student."
+          "description": "Who is reviewing: the student first, then a parent. Default student. Parent review needs an administrator account."
         },
         "undo": {
           "name": "Undo",
@@ -285,6 +285,9 @@
     },
     "ambiguous_assignment": {
       "message": "Assignment {assignment_id} belongs to more than one student; give student_id."
+    },
+    "parent_only": {
+      "message": "Only a Home Assistant administrator can mark a parent review."
     }
   }
 }

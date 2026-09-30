@@ -29,6 +29,7 @@ from .const import (
     CONF_BASE_URL,
     DOMAIN,
     FOLLOWUP_UID_PREFIX,
+    CLOSED_VISIBLE_DAYS,
     FOLLOWUP_VISIBLE_DAYS,
     UPCOMING_WINDOW_DAYS,
 )
@@ -104,6 +105,24 @@ _NEWEST_FIRST: dict[Bucket, str] = {
     Bucket.PARENT_REVIEW: "student_reviewed_at",
     Bucket.CLOSED: "closed_at",
 }
+
+
+def _reviewed_since(reviewed_at: datetime | None, graded_at: datetime | None) -> bool:
+    """Return True if a review covers the current grade.
+
+    A regrade after the review (Canvas moves graded_at) needs reviewing again.
+    """
+    if reviewed_at is None:
+        return False
+    return graded_at is None or reviewed_at >= graded_at
+
+
+def _closed_long_ago(record: AssignmentRecord | None, now: datetime) -> bool:
+    """Return True for work closed more than CLOSED_VISIBLE_DAYS ago."""
+    closed_at = record.closed_at if record else None
+    return closed_at is not None and now - closed_at > timedelta(
+        days=CLOSED_VISIBLE_DAYS
+    )
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -312,8 +331,12 @@ class CanvasTodoListEntity(
                 in_review_window=in_review_window(
                     graded_at, assignment.due_at, workflow.review_since
                 ),
-                student_reviewed=bool(record and record.student_reviewed_at),
-                parent_reviewed=bool(record and record.parent_reviewed_at),
+                student_reviewed=_reviewed_since(
+                    record.student_reviewed_at if record else None, graded_at
+                ),
+                parent_reviewed=_reviewed_since(
+                    record.parent_reviewed_at if record else None, graded_at
+                ),
                 closed=bool(record and record.closed_at),
             )
             compact = {
@@ -337,7 +360,9 @@ class CanvasTodoListEntity(
                 **_grade_fields(assignment, graded, percent, escalated),
                 **_review_fields(record),
             }
-            if bucket in lists:
+            if bucket is Bucket.CLOSED and _closed_long_ago(record, now):
+                pass
+            elif bucket in lists:
                 lists[bucket].append(compact)
                 escalated_count += escalated and bucket in (
                     Bucket.REVIEW,

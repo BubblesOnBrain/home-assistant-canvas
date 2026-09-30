@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 from freezegun.api import FrozenDateTimeFactory
 import pytest
 
 from homeassistant.core import Context, HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.auth.models import User
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -329,3 +331,71 @@ async def test_escalation_threshold_option(
     await hass.async_block_till_done()
     assert _find(hass, "review", LOW_GRADE)["escalated"] is False
     assert _attrs(hass)["escalated_count"] == 0
+
+
+async def test_parent_review_needs_admin(
+    hass: HomeAssistant,
+    coordinator: CanvasDataUpdateCoordinator,
+    hass_read_only_user: User,
+) -> None:
+    """The student's account can't sign off the parent review."""
+    context = Context(user_id=hass_read_only_user.id)
+    await _call(
+        hass, "review_assignment", {"assignment_id": LOW_GRADE}, context=context
+    )
+    with pytest.raises(ServiceValidationError) as err:
+        await _call(
+            hass,
+            "review_assignment",
+            {"assignment_id": LOW_GRADE, "role": "parent"},
+            context=context,
+        )
+    assert err.value.translation_key == "parent_only"
+    assert _uids(hass, "parent_review") == [LOW_GRADE]
+
+
+async def test_regrade_after_review_reopens(
+    hass: HomeAssistant,
+    coordinator: CanvasDataUpdateCoordinator,
+    aioclient_mock: AiohttpClientMocker,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """A grade changed after both reviews goes back to review."""
+    await _call(hass, "review_assignment", {"assignment_id": LOW_GRADE})
+    await _call(
+        hass, "review_assignment", {"assignment_id": LOW_GRADE, "role": "parent"}
+    )
+    assert LOW_GRADE not in _uids(hass, "review") + _uids(hass, "parent_review")
+
+    freezer.tick(timedelta(hours=2))
+    subs = [s for s in DEFAULT_SUBS if str(s["assignment_id"]) != LOW_GRADE] + [
+        _graded(LOW_GRADE, "2026-09-25T03:59:00Z", 10.0, "2026-09-29T13:00:00Z")
+    ]
+    _routes(aioclient_mock, subs)
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+    assert LOW_GRADE in _uids(hass, "review")
+
+
+async def test_closed_missing_work_stays_in_attention(
+    hass: HomeAssistant, coordinator: CanvasDataUpdateCoordinator
+) -> None:
+    """Closing work Canvas still shows missing doesn't hide it."""
+    await _call(hass, "close_assignment", {"assignment_id": MISSING})
+    assert _uids(hass, "attention") == [MISSING]
+    assert _uids(hass, "closed") == []
+
+
+async def test_closed_list_shows_last_30_days(
+    hass: HomeAssistant,
+    coordinator: CanvasDataUpdateCoordinator,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """Closed work drops off the closed list after 30 days."""
+    await _call(hass, "close_assignment", {"assignment_id": SUBMITTED})
+    assert _uids(hass, "closed") == [SUBMITTED]
+    freezer.tick(timedelta(days=31))
+    coordinator.async_workflow_changed()
+    await hass.async_block_till_done()
+    assert _uids(hass, "closed") == []
+    assert SUBMITTED not in _uids(hass, "waiting")

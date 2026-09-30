@@ -284,6 +284,11 @@ class CanvasWorkflowCard extends HTMLElement {
       );
     } else {
       const a = stateObj.attributes;
+      // Drop drafts for work that has left the waiting list (e.g. graded).
+      const waiting = new Set((a.waiting_items || []).map((i) => i.uid));
+      for (const uid of Object.keys(this._closing)) {
+        if (!waiting.has(uid)) delete this._closing[uid];
+      }
       for (const section of this._config.show) {
         const items = [...(a[ITEMS_KEY[section]] || [])];
         if (!PRESORTED.has(section)) items.sort(byUrgencyThenDue);
@@ -566,8 +571,15 @@ class CanvasWorkflowCard extends HTMLElement {
         }),
       ]);
     }
-    // The draft lives on the card, so a re-render keeps what she typed. These
-    // fields don't re-render on blur, or clicking Close would miss the button.
+    // The draft lives on the card, so a re-render keeps what she typed. A
+    // held-back re-render waits while focus moves to a button in this form,
+    // or clicking Close would miss the button it rebuilt.
+    const flushUnlessForm = (ev) => {
+      const next = ev.relatedTarget;
+      if (!next || !next.closest || next.closest(".close-form") === null) {
+        this._flushRender();
+      }
+    };
     const reason = h(
       "select",
       {
@@ -576,6 +588,7 @@ class CanvasWorkflowCard extends HTMLElement {
         onchange: (ev) => {
           draft.reason = ev.target.value;
         },
+        onblur: flushUnlessForm,
       },
       CLOSE_REASONS.map((r) =>
         h("option", { value: r, text: this._label("close_reason", r) }),
@@ -591,6 +604,7 @@ class CanvasWorkflowCard extends HTMLElement {
       oninput: (ev) => {
         draft.note = ev.target.value;
       },
+      onblur: flushUnlessForm,
     });
     note.value = draft.note;
     return h("div", { class: "close-form" }, [

@@ -178,6 +178,10 @@ ATTENTION_STATES = frozenset(
         DisplayState.NEEDS_MAKEUP,
     }
 )
+# Attention states that come from Canvas (or a missed quiz), not from a claim.
+CANVAS_ATTENTION_STATES = frozenset(
+    {DisplayState.MISSING, DisplayState.ZEROED, DisplayState.NEEDS_MAKEUP}
+)
 WAITING_STATES = frozenset(
     {
         DisplayState.CLAIMED_PENDING,
@@ -193,7 +197,9 @@ _PREP_WORK = re.compile(
     re.IGNORECASE,
 )
 _TEST_NAME = re.compile(
-    r"\b(tests?|exams?|midterms?|finals?|frq|summative|unit assessment)\b",
+    # Not bare "final" or "FRQ": "Final Draft" and "FRQ #3" are homework.
+    r"\b(tests?|exams?|midterms?|final (exams?|tests?)|semester finals?"
+    r"|summative|unit assessment)\b",
     re.IGNORECASE,
 )
 _QUIZ_NAME = re.compile(r"\bquiz(zes)?\b", re.IGNORECASE)
@@ -391,11 +397,13 @@ def followup_actions(
     existing: Mapping[FollowupReason, FollowupStage],
     *,
     graded: bool = False,
+    closed: bool = False,
 ) -> list[tuple[FollowupReason, FollowupAction]]:
     """Return the follow-up changes for one assignment.
 
     Idempotent: a reason that already has a follow-up (in any stage) is never
-    opened again, so a follow-up the student resolved stays resolved.
+    opened again, so a follow-up the student resolved stays resolved. Work
+    closed without a grade opens no "did it arrive?" follow-ups.
     """
     actions: list[tuple[FollowupReason, FollowupAction]] = []
     wanted = {
@@ -404,6 +412,9 @@ def followup_actions(
         FollowupReason.PAPER_NOT_GRADED: state is DisplayState.PAPER_NOT_GRADED,
         FollowupReason.MAKEUP: state is DisplayState.NEEDS_MAKEUP,
     }
+    if closed:
+        wanted[FollowupReason.NOT_IN_CANVAS] = False
+        wanted[FollowupReason.PAPER_NOT_GRADED] = False
     for reason, open_it in wanted.items():
         if open_it and reason not in existing:
             actions.append((reason, FollowupAction.OPEN))
@@ -473,7 +484,9 @@ def work_bucket(
         if not in_review_window or (student_reviewed and parent_reviewed):
             return Bucket.DONE
         return Bucket.PARENT_REVIEW if student_reviewed else Bucket.REVIEW
-    if closed:
+    # Closing only stops waiting on the teacher: work Canvas still shows
+    # missing or zeroed (or a missed quiz) keeps needing attention.
+    if closed and state not in CANVAS_ATTENTION_STATES:
         return Bucket.CLOSED
     if state in ATTENTION_STATES or (
         state is DisplayState.DONE_NOT_SUBMITTED and overdue

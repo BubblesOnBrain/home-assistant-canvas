@@ -226,13 +226,23 @@ def async_setup_services(hass: HomeAssistant) -> None:
         coordinator.async_workflow_changed()
 
     async def review_assignment(call: ServiceCall) -> None:
+        role = ReviewRole(call.data[ATTR_ROLE])
+        # Parent review is for administrators (the parents); the student's
+        # own non-admin account can't sign off for them. Calls with no user
+        # (automations, scripts) are trusted.
+        if role is ReviewRole.PARENT and call.context.user_id is not None:
+            user = await hass.auth.async_get_user(call.context.user_id)
+            if user is None or not user.is_admin:
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN, translation_key="parent_only"
+                )
         coordinator = _coordinator(hass, call)
         assignment_id, student_id, snapshot = _resolve_assignment(coordinator, call)
         await coordinator.workflow.async_mark_reviewed(
             assignment_id,
             student_id,
             dt_util.utcnow(),
-            role=ReviewRole(call.data[ATTR_ROLE]),
+            role=role,
             by=await _async_user_name(hass, call),
             undo=call.data[ATTR_UNDO],
             snapshot=snapshot,

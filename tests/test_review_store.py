@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -359,3 +360,32 @@ def test_in_review_window() -> None:
     assert in_review_window(None, NOW, since)
     assert not in_review_window(None, None, since)
     assert in_review_window(since - timedelta(days=100), None, None)
+
+
+async def test_closed_claim_opens_no_followup(hass: HomeAssistant) -> None:
+    """Paper work closed as not graded doesn't open "ask about paper" later."""
+    store = CanvasWorkflowStore(hass, "acct")
+    await store.async_set_assignment(AID, STUDENT, NOW, stage=Stage.SUBMITTED_CLAIMED)
+    await store.async_close_without_grade(
+        AID, STUDENT, NOW, reason=CloseReason.NOT_GRADED, note=None, by="Sydney"
+    )
+    worksheet = _assignment(name="Chapter 4 Check", paper=True, missing=True)
+    _reconcile(store, _data(worksheet), NOW + timedelta(days=8))
+    assert store.followups == {}
+
+
+async def test_pending_review_quiz_is_not_graded(hass: HomeAssistant) -> None:
+    """A partly auto-graded quiz awaiting the teacher isn't logged as a grade."""
+    store = CanvasWorkflowStore(hass, "acct")
+    quiz = _assignment(name="Quiz 4", score=8.0, grade="8", graded_at=NOW)
+    assert quiz.submission is not None
+    pending = replace(
+        quiz,
+        submission=replace(
+            quiz.submission,
+            workflow_state="pending_review",
+            submitted_at=NOW - timedelta(hours=1),
+        ),
+    )
+    _reconcile(store, _data(pending), NOW)
+    assert store.grades == {}
