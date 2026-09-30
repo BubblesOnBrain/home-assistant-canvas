@@ -1,0 +1,63 @@
+set_assignment_stage:
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: canvas
+    assignment_id:
+      required: true
+      example: "5506356"
+      selector:
+        text:
+    stage:
+      required: false
+      selector:
+        select:
+          translation_key: stage
+          options:
+            - not_started
+            - working
+            - done_not_submitted
+            - submitted_claimed
+    note:
+      required: false
+      selector:
+        text:
+          multiline: true
+
+set_followup_stage:
+  fields:
+    config_entry_id:
+      required: false
+      selector:
+        config_entry:
+          integration: canvas
+    followup_id:
+      required: true
+      example: "5506356:late_work"
+      selector:
+        text:
+    stage:
+      required: false
+      selector:
+        select:
+          translation_key: followup_stage
+          options:
+            - needs_contact
+            - contacted
+            - resolved
+    method:
+      required: false
+      selector:
+        select:
+          translation_key: followup_method
+          options:
+            - email
+            - late_form
+            - in_person
+    note:
+      required: false
+      selector:
+        text:
+          multiline: true
